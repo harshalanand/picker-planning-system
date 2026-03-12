@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Picker Planning System</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080D14;--s1:#0D1520;--s2:#111B28;--card:#162030;--border:#1E2D40;
+  --border2:#253648;--accent:#3B82F6;--accent2:#6366F1;--green:#10B981;
+  --gold:#F59E0B;--red:#EF4444;--text:#E2E8F0;--muted:#64748B;--muted2:#94A3B8;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
+}
+html,body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;height:100%}
+#root{min-height:100vh}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--s1)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+/* Header */
+.hdr{background:var(--s1);border-bottom:1px solid var(--border);padding:0 24px;height:52px;
+  display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100}
+.logo{font-family:var(--mono);font-size:1rem;font-weight:700;color:var(--accent);letter-spacing:-.01em}
+.logo span{color:var(--muted)}
+.hdr-sub{font-size:.7rem;color:var(--muted);border-left:1px solid var(--border);padding-left:12px}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+/* Tabs */
+.tabs{display:flex;gap:2px;background:var(--s1);border-bottom:1px solid var(--border);padding:0 24px}
+.tab{padding:10px 16px;font-size:.78rem;font-weight:500;color:var(--muted);cursor:pointer;
+  border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+/* Layout */
+.page{padding:20px 24px;max-width:1600px;margin:0 auto}
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
+.card-sm{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
+/* Section labels */
+.sec-lbl{font-family:var(--mono);font-size:.6rem;text-transform:uppercase;letter-spacing:.14em;
+  color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:12px}
+/* KPI grid */
+.kpi-grid{display:grid;gap:10px}
+.kpi-card{background:var(--s2);border:1px solid var(--border);border-radius:8px;
+  padding:12px 14px;position:relative;overflow:hidden}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.kpi-card.blue::before{background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.kpi-card.green::before{background:var(--green)}
+.kpi-card.gold::before{background:var(--gold)}
+.kpi-card.red::before{background:var(--red)}
+.kpi-card.purple::before{background:var(--accent2)}
+.kpi-val{font-family:var(--mono);font-size:1.4rem;font-weight:700;color:var(--text)}
+.kpi-lbl{font-size:.6rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px}
+.kpi-sub{font-size:.62rem;color:var(--muted);margin-top:2px}
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:7px;
+  font-size:.8rem;font-weight:600;cursor:pointer;border:none;transition:all .15s}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
+.btn-primary:hover{opacity:.9;transform:translateY(-1px)}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-ghost{background:transparent;border:1px solid var(--border2);color:var(--muted2)}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.btn-danger{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:var(--red)}
+.btn-danger:hover{background:rgba(239,68,68,.2)}
+.btn-green{background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);color:var(--green)}
+.btn-sm{padding:5px 10px;font-size:.72rem}
+/* Alerts */
+.alert{border-radius:8px;padding:10px 14px;margin:8px 0;font-size:.78rem}
+.alert-info{background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-left:3px solid var(--accent)}
+.alert-warn{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-left:3px solid var(--gold)}
+.alert-ok{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);border-left:3px solid var(--green)}
+.alert-err{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);border-left:3px solid var(--red)}
+/* Drop zone */
+.drop-zone{border:2px dashed var(--border2);border-radius:10px;padding:32px;text-align:center;
+  cursor:pointer;transition:all .2s;background:var(--s2)}
+.drop-zone:hover,.drop-zone.drag{border-color:var(--accent);background:rgba(59,130,246,.06)}
+.drop-icon{font-size:2rem;margin-bottom:8px}
+/* Form elements */
+.form-row{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-label{font-size:.7rem;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.06em}
+input,select,textarea{background:var(--s2);border:1px solid var(--border2);border-radius:6px;
+  color:var(--text);padding:7px 10px;font-size:.8rem;font-family:var(--sans);outline:none;transition:border .15s}
+input:focus,select:focus{border-color:var(--accent)}
+input[type="date"],input[type="time"]{color-scheme:dark}
+input[type="range"]{accent-color:var(--accent)}
+/* Table */
+.data-table{width:100%;border-collapse:collapse;font-size:.74rem}
+.data-table th{background:var(--s1);color:var(--muted);font-size:.6rem;text-transform:uppercase;
+  letter-spacing:.1em;padding:8px 10px;text-align:left;border-bottom:2px solid var(--border);
+  white-space:nowrap;font-weight:600;position:sticky;top:0}
+.data-table td{padding:7px 10px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:.69rem}
+.data-table tr:hover td{background:rgba(59,130,246,.04)}
+.data-table .num{text-align:right}
+/* Status pills */
+.pill{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;
+  font-size:.58rem;font-weight:700;font-family:var(--mono);letter-spacing:.04em;white-space:nowrap}
+.pill-done{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.pill-plan{background:rgba(59,130,246,.15);color:var(--accent);border:1px solid rgba(59,130,246,.3)}
+.pill-delay{background:rgba(245,158,11,.15);color:var(--gold);border:1px solid rgba(245,158,11,.3)}
+.pill-cancel{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.pill-notpick{background:rgba(100,116,139,.15);color:var(--muted2);border:1px solid rgba(100,116,139,.3)}
+.pill-g1{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.25)}
+.pill-g2{background:rgba(59,130,246,.15);color:var(--accent);border:1px solid rgba(59,130,246,.25)}
+.pill-g3{background:rgba(245,158,11,.15);color:var(--gold);border:1px solid rgba(245,158,11,.25)}
+/* Token box */
+.token-box{background:linear-gradient(135deg,rgba(59,130,246,.12),rgba(99,102,241,.12));
+  border:1.5px solid var(--accent);border-radius:12px;padding:16px 24px;text-align:center}
+.token-val{font-family:var(--mono);font-size:1.8rem;font-weight:700;color:var(--accent);letter-spacing:.05em}
+/* Gantt */
+.gantt-row{display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid rgba(30,45,64,.5)}
+.gantt-lbl{font-family:var(--mono);font-size:.62rem;color:var(--muted);width:70px;flex-shrink:0;text-align:right}
+.gantt-track{flex:1;height:18px;background:var(--s1);border-radius:3px;position:relative;overflow:visible}
+.gantt-bar{position:absolute;height:14px;top:2px;border-radius:3px;cursor:default;
+  display:flex;align-items:center;padding:0 4px;overflow:hidden}
+.gantt-bar-txt{font-size:.5rem;font-weight:700;color:rgba(255,255,255,.85);white-space:nowrap;overflow:hidden}
+/* Progress bar */
+.pbar{height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.pbar-fill{height:100%;border-radius:3px;transition:width .4s}
+/* Spinner */
+.spin{width:28px;height:28px;border:2px solid var(--border);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .7s linear infinite;margin:auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* Grid helpers */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.g5{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.g6{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+/* Expander */
+.expander{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:8px 0}
+.exp-hdr{background:var(--s2);padding:10px 14px;cursor:pointer;display:flex;justify-content:space-between;
+  align-items:center;font-size:.78rem;font-weight:500;user-select:none}
+.exp-hdr:hover{background:rgba(59,130,246,.06)}
+.exp-body{padding:14px;border-top:1px solid var(--border)}
+/* Divider */
+.divider{border:none;border-top:1px solid var(--border);margin:14px 0}
+/* Tooltip hint */
+.hint{font-size:.65rem;color:var(--muted);margin-top:4px}
+/* Scrollable table wrapper */
+.tbl-wrap{overflow-x:auto;max-height:480px;overflow-y:auto;border-radius:8px;border:1px solid var(--border)}
+/* Floor badge */
+.fl-badge{display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;border-radius:5px;background:var(--s1);
+  font-family:var(--mono);font-size:.62rem;font-weight:700;border:1px solid var(--border2)}
+/* Pagination */
+.pagination{display:flex;align-items:center;gap:6px;justify-content:center;padding:10px 0}
+.page-btn{padding:4px 10px;border-radius:5px;font-size:.72rem;cursor:pointer;
+  background:var(--s2);border:1px solid var(--border2);color:var(--muted)}
+.page-btn:hover,.page-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+/* Filter bar */
+.filter-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.filter-bar input,.filter-bar select{height:32px;font-size:.75rem}
+/* Bar chart */
+.bar-chart-row{display:flex;align-items:center;gap:8px;margin:4px 0}
+.bar-chart-lbl{font-size:.65rem;color:var(--muted);width:60px;text-align:right;flex-shrink:0}
+.bar-chart-bar{height:16px;background:var(--s1);flex:1;border-radius:3px;position:relative;overflow:hidden}
+.bar-chart-fill{height:100%;border-radius:3px}
+.bar-chart-val{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:.58rem;font-weight:700;color:rgba(255,255,255,.8);font-family:var(--mono)}
+/* Toast */
+.toast-wrap{position:fixed;bottom:20px;right:20px;z-index:999;display:flex;flex-direction:column;gap:8px}
+.toast{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;
+  font-size:.78rem;display:flex;align-items:center;gap:8px;min-width:240px;
+  animation:slideIn .2s ease;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.toast.ok{border-left:3px solid var(--green)}
+.toast.err{border-left:3px solid var(--red)}
+.toast.info{border-left:3px solid var(--accent)}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1}}
+/* Confirmation modal */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:flex;align-items:center;justify-content:center}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;width:460px;max-width:90vw}
+.modal-title{font-family:var(--mono);font-size:1rem;font-weight:700;margin-bottom:10px}
+.modal-body{font-size:.8rem;color:var(--muted2);margin-bottom:20px;line-height:1.6}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+// ── API base URL (auto-detect) ──────────────────────────────────────────────
+const API = window.location.origin;
+
+async function apiFetch(path, opts={}) {
+  const r = await fetch(`${API}${path}`, opts);
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({detail:'Request failed'}));
+    throw new Error(e.detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+// ── Toast ───────────────────────────────────────────────────────────────────
+function useToast() {
+  const [toasts, setToasts] = useState([]);
+  const add = useCallback((msg, type='info') => {
+    const id = Date.now();
+    setToasts(t => [...t, {id,msg,type}]);
+    setTimeout(() => setToasts(t => t.filter(x=>x.id!==id)), 4000);
+  },[]);
+  return {toasts, toast:add};
+}
+
+function ToastContainer({toasts}) {
+  return <div className="toast-wrap">
+    {toasts.map(t => <div key={t.id} className={`toast ${t.type}`}>
+      {t.type==='ok'?'✓':t.type==='err'?'✗':'ℹ'} {t.msg}
+    </div>)}
+  </div>;
+}
+
+// ── Confirm Modal ────────────────────────────────────────────────────────────
+function Confirm({title,body,onConfirm,onCancel}) {
+  return <div className="modal-backdrop">
+    <div className="modal">
+      <div className="modal-title">{title}</div>
+      <div className="modal-body">{body}</div>
+      <div className="modal-actions">
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-danger btn-sm" onClick={onConfirm}>Confirm</button>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── Status pill ──────────────────────────────────────────────────────────────
+const STATUS_CLS = {Done:'pill-done',Planned:'pill-plan',Delayed:'pill-delay','Not Picked':'pill-notpick',Cancelled:'pill-cancel'};
+function StatusPill({s}) { return <span className={`pill ${STATUS_CLS[s]||'pill-plan'}`}>{s}</span>; }
+function GrpPill({g}) { return <span className={`pill pill-${(g||'G1').toLowerCase()}`}>{g}</span>; }
+
+// ── Pagination hook ──────────────────────────────────────────────────────────
+function usePager(items, pageSize=50) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const slice = items.slice((page-1)*pageSize, page*pageSize);
+  useEffect(()=>{setPage(1)},[items.length]);
+  return {page, setPage, totalPages, slice};
+}
+
+function Pager({page,totalPages,setPage,total}) {
+  if (totalPages<=1) return null;
+  return <div className="pagination">
+    <button className="page-btn" onClick={()=>setPage(1)} disabled={page===1}>«</button>
+    <button className="page-btn" onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1}>‹</button>
+    <span style={{fontSize:'.72rem',color:'var(--muted)'}}>Page {page} / {totalPages} ({total} rows)</span>
+    <button className="page-btn" onClick={()=>setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages}>›</button>
+    <button className="page-btn" onClick={()=>setPage(totalPages)} disabled={page===totalPages}>»</button>
+  </div>;
+}
+
+// ── Gantt Chart ──────────────────────────────────────────────────────────────
+function GanttChart({details, wh_start=480, wh_end=1020}) {
+  const tm = (s) => { try { const [h,m]=s.split(':').map(Number); return h*60+m; } catch { return null; } };
+  const pct = (v) => ((v-wh_start)/(wh_end-wh_start)*100).toFixed(2)+'%';
+  const COLORS=['#3B82F6','#10B981','#F59E0B','#EF4444','#6366F1','#14B8A6','#F97316','#EC4899','#8B5CF6','#06B6D4'];
+  const floors = [...new Set(details.map(d=>d.floor||d.FLOOR))].sort();
+  const floorGroups = {};
+  floors.forEach(f => {
+    floorGroups[f] = {};
+    details.filter(d=>(d.floor||d.FLOOR)===f).forEach(d=>{
+      const pk = d.picker_no||d.PICKER_NO||1;
+      if(!floorGroups[f][pk]) floorGroups[f][pk]=[];
+      floorGroups[f][pk].push(d);
+    });
+  });
+  // Time axis ticks
+  const ticks = [8,9,10,11,12,13,14,15,16,17].map(h=>({h,pct:pct(h*60)}));
+
+  return <div>
+    {/* Time axis */}
+    <div style={{display:'flex',position:'relative',height:20,marginLeft:78,marginBottom:2}}>
+      {ticks.map(t=><div key={t.h} style={{position:'absolute',left:t.pct,fontSize:'.55rem',color:'var(--muted)',transform:'translateX(-50%)',fontFamily:'var(--mono)'}}>{t.h}:00</div>)}
+    </div>
+    <div style={{maxHeight:380,overflowY:'auto',paddingRight:4}}>
+    {floors.map(f=><div key={f} style={{marginBottom:8}}>
+      <div style={{fontSize:'.6rem',fontFamily:'var(--mono)',color:'var(--accent)',fontWeight:700,marginBottom:4}}>FLOOR {f}</div>
+      {Object.entries(floorGroups[f]).map(([pk,dos])=>{
+        const color=COLORS[(parseInt(pk)-1)%COLORS.length];
+        return <div key={pk} className="gantt-row">
+          <div className="gantt-lbl">P{pk}</div>
+          <div className="gantt-track">
+            {/* Lunch break */}
+            <div style={{position:'absolute',left:pct(780),width:pct(825-780+480).replace('%','') < 0 ? '0' : ((825-780)/(wh_end-wh_start)*100).toFixed(2)+'%',height:'100%',background:'rgba(239,68,68,.12)',borderRadius:2}}/>
+            {dos.map((d,i)=>{
+              const ts=tm(d.start_time||d.START_TIME), te=tm(d.end_time||d.END_TIME);
+              if(!ts||!te) return null;
+              const l=Math.max(0,((ts-wh_start)/(wh_end-wh_start)*100));
+              const w=Math.min(100-l,((te-ts)/(wh_end-wh_start)*100));
+              return <div key={i} className="gantt-bar" title={`DO:${d.do_no||d.DO_NO} | ${d.start_time||d.START_TIME}–${d.end_time||d.END_TIME} | ${d.do_qty||d.DO_QTY}pcs`}
+                style={{left:l+'%',width:w+'%',background:color,opacity:.85}}>
+                <span className="gantt-bar-txt">{d.do_qty||d.DO_QTY}</span>
+              </div>;
+            })}
+          </div>
+        </div>;
+      })}
+    </div>)}
+    </div>
+  </div>;
+}
+
+// ── Business Rules Expander ──────────────────────────────────────────────────
+function BizRules({cfg,setCfg}) {
+  const [open,setOpen]=useState(false);
+  const upd=(k,v)=>setCfg(c=>({...c,[k]:v}));
+  return <div className="expander">
+    <div className="exp-hdr" onClick={()=>setOpen(o=>!o)}>
+      <span>⚙️ Business Rules & Shift Configuration</span>
+      <span style={{color:'var(--muted)',fontSize:'.7rem'}}>{open?'▲':'▼'} BGT:{cfg.bgt} | Fill:{cfg.fill_pct}% | {cfg.start_min/60|0}:00–{cfg.wh_end/60|0}:00</span>
+    </div>
+    {open && <div className="exp-body">
+      <div className="g3" style={{gap:16}}>
+        <div className="form-group">
+          <label className="form-label">Shift Start</label>
+          <input type="time" value={`${String(Math.floor(cfg.start_min/60)).padStart(2,'0')}:${String(cfg.start_min%60).padStart(2,'0')}`}
+            onChange={e=>{const[h,m]=e.target.value.split(':');upd('start_min',+h*60+ +m);}}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Shift End</label>
+          <input type="time" value={`${String(Math.floor(cfg.wh_end/60)).padStart(2,'0')}:${String(cfg.wh_end%60).padStart(2,'0')}`}
+            onChange={e=>{const[h,m]=e.target.value.split(':');upd('wh_end',+h*60+ +m);}}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Lunch Start</label>
+          <input type="time" value={`${String(Math.floor(cfg.lunch_s/60)).padStart(2,'0')}:${String(cfg.lunch_s%60).padStart(2,'0')}`}
+            onChange={e=>{const[h,m]=e.target.value.split(':');upd('lunch_s',+h*60+ +m);}}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Lunch End</label>
+          <input type="time" value={`${String(Math.floor(cfg.lunch_e/60)).padStart(2,'0')}:${String(cfg.lunch_e%60).padStart(2,'0')}`}
+            onChange={e=>{const[h,m]=e.target.value.split(':');upd('lunch_e',+h*60+ +m);}}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Default BGT (pcs/machine)</label>
+          <input type="number" value={cfg.bgt} min="500" max="6000" step="100"
+            onChange={e=>upd('bgt',+e.target.value)}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Fill % ({cfg.fill_pct}%)</label>
+          <input type="range" min="50" max="100" value={cfg.fill_pct}
+            onChange={e=>upd('fill_pct',+e.target.value)} style={{marginTop:8}}/>
+        </div>
+      </div>
+      <div className="hint" style={{marginTop:8}}>Effective minutes = Shift duration − Lunch. PCS/min = BGT ÷ Eff. min per machine.</div>
+    </div>}
+  </div>;
+}
+
+// ── NEW PLAN TAB ─────────────────────────────────────────────────────────────
+function NewPlanTab({toast}) {
+  const [file,setFile]=useState(null);
+  const [parsed,setParsed]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [generating,setGenerating]=useState(false);
+  const [planDate,setPlanDate]=useState(new Date().toISOString().slice(0,10));
+  const [notes,setNotes]=useState('');
+  const [result,setResult]=useState(null);
+  const [drag,setDrag]=useState(false);
+  const [cfg,setCfg]=useState({start_min:480,wh_end:1020,lunch_s:780,lunch_e:825,eff_min:495,bgt:3000,fill_pct:70});
+  const [activeDetail,setActiveDetail]=useState('dos');
+  const [doFilter,setDoFilter]=useState('');
+  const dropRef=useRef();
+
+  const uploadExcel = async(f) => {
+    if(!f) return;
+    setFile(f); setParsed(null); setResult(null); setLoading(true);
+    try {
+      const fd=new FormData(); fd.append('file',f);
+      const data = await apiFetch('/api/excel/parse',{method:'POST',body:fd});
+      setParsed(data);
+      toast(`✓ Loaded ${data.summary.total_dos} DOs, ${data.summary.machines} machines`,'ok');
+    } catch(e){ toast(e.message,'err'); }
+    finally { setLoading(false); }
+  };
+
+  const handleDrop = e => { e.preventDefault(); setDrag(false); const f=e.dataTransfer.files[0]; if(f) uploadExcel(f); };
+
+  const generate = async() => {
+    if(!parsed) return;
+    setGenerating(true); setResult(null);
+    try {
+      const data = await apiFetch('/api/plans/generate',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({plan_date:planDate,notes,cfg:{...cfg,eff_min:cfg.wh_end-cfg.start_min-(cfg.lunch_e-cfg.lunch_s)},
+          dos:parsed.dos, machines:parsed.machines})
+      });
+      if(data.error) { toast(data.message,'err'); setResult(data); }
+      else { toast(`Plan ${data.token} saved — ${data.total_dos} DOs allocated`,'ok'); setResult(data); }
+    } catch(e){ toast(e.message,'err'); }
+    finally { setGenerating(false); }
+  };
+
+  const filteredDos = useMemo(()=>{
+    if(!result?.details) return [];
+    const q=doFilter.toLowerCase();
+    return !q ? result.details : result.details.filter(d=>
+      String(d.do_no||'').toLowerCase().includes(q)||
+      String(d.sec||'').toLowerCase().includes(q)||
+      String(d.machine_no||'').toLowerCase().includes(q));
+  },[result?.details, doFilter]);
+  const {page,setPage,totalPages,slice:dos_page} = usePager(filteredDos,60);
+
+  return <div className="page">
+    <div className="g2" style={{gap:16,marginBottom:16}}>
+      {/* Left: Upload + Config */}
+      <div>
+        <div className="sec-lbl">Upload Excel File</div>
+        <div ref={dropRef} className={`drop-zone${drag?' drag':''}`}
+          onDragOver={e=>{e.preventDefault();setDrag(true)}}
+          onDragLeave={()=>setDrag(false)} onDrop={handleDrop}
+          onClick={()=>document.getElementById('xl-upload').click()}>
+          {loading ? <div className="spin"/> : <>
+            <div className="drop-icon">📋</div>
+            <div style={{fontWeight:600,marginBottom:4}}>{file ? file.name : 'Drop TEMPLATE.xlsx here'}</div>
+            <div style={{fontSize:'.72rem',color:'var(--muted)'}}>or click to browse — needs DO sheet + MACHINE sheet</div>
+          </>}
+        </div>
+        <input id="xl-upload" type="file" accept=".xlsx,.xls" style={{display:'none'}}
+          onChange={e=>uploadExcel(e.target.files[0])}/>
+
+        {parsed && <div className="alert alert-ok" style={{marginTop:8}}>
+          ✓ <b>{parsed.summary.total_dos}</b> DOs · <b>{parseInt(parsed.summary.total_qty).toLocaleString()}</b> pcs · <b>{parsed.summary.machines}</b> machines
+          · Floors {parsed.summary.floors.join(', ')}
+        </div>}
+
+        <BizRules cfg={cfg} setCfg={setCfg}/>
+
+        <div className="form-row" style={{marginTop:12,gap:10}}>
+          <div className="form-group" style={{flex:1}}>
+            <label className="form-label">Plan Date</label>
+            <input type="date" value={planDate} onChange={e=>setPlanDate(e.target.value)}/>
+          </div>
+          <div className="form-group" style={{flex:2}}>
+            <label className="form-label">Notes (optional)</label>
+            <input type="text" value={notes} placeholder="e.g. Morning batch" onChange={e=>setNotes(e.target.value)}/>
+          </div>
+        </div>
+
+        <button className="btn btn-primary" style={{marginTop:12,width:'100%',padding:'11px'}}
+          disabled={!parsed||generating} onClick={generate}>
+          {generating ? <><div className="spin" style={{width:16,height:16,borderWidth:2}}/> Generating...</> : '⚡ Generate Plan'}
+        </button>
+      </div>
+
+      {/* Right: Demand summary (if parsed) */}
+      <div>
+        {parsed && <>
+          <div className="sec-lbl">Demand Analysis</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:12}}>
+            {[
+              {lbl:'Total DOs',val:parsed.summary.total_dos.toLocaleString(),cls:'blue'},
+              {lbl:'Total QTY',val:parseInt(parsed.summary.total_qty).toLocaleString(),cls:'green'},
+              {lbl:'Machines',val:parsed.summary.machines,cls:'purple'},
+            ].map(k=><div key={k.lbl} className={`kpi-card ${k.cls}`}>
+              <div className="kpi-lbl">{k.lbl}</div>
+              <div className="kpi-val" style={{fontSize:'1.2rem'}}>{k.val}</div>
+            </div>)}
+          </div>
+        </>}
+
+        {result && !result.error && <>
+          <div className="token-box" style={{marginBottom:12}}>
+            <div style={{fontSize:'.65rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.1em',marginBottom:4}}>Plan Token</div>
+            <div className="token-val">{result.token}</div>
+            <div style={{fontSize:'.68rem',color:'var(--muted)',marginTop:4}}>{result.plan_date} · Run #{result.run_number}</div>
+          </div>
+          <div className="g3" style={{gap:8,marginBottom:12}}>
+            {[
+              {lbl:'DOs Allocated',val:result.total_dos,cls:'blue'},
+              {lbl:'Total QTY',val:parseInt(result.total_qty).toLocaleString(),cls:'green'},
+              {lbl:'Pickers Used',val:result.pickers_used,cls:'purple'},
+              {lbl:'Avg Utilisation',val:`${result.avg_util}%`,cls:'gold'},
+              {lbl:'Skipped DOs',val:result.skipped,cls:result.skipped>0?'red':'green'},
+              {lbl:'Excluded (locked)',val:result.excluded_count||0,cls:'gold'},
+            ].map(k=><div key={k.lbl} className={`kpi-card ${k.cls}`}>
+              <div className="kpi-lbl">{k.lbl}</div>
+              <div className="kpi-val" style={{fontSize:'1.1rem'}}>{k.val}</div>
+            </div>)}
+          </div>
+
+          {/* Machine Groups */}
+          {result.grp_summary && <div className="card-sm" style={{marginBottom:12}}>
+            <div className="sec-lbl">Machine Groups</div>
+            <div className="g3">
+              {Object.entries(result.grp_summary).map(([g,v])=><div key={g}>
+                <GrpPill g={g}/> <span style={{fontSize:'.72rem',color:'var(--muted)',marginLeft:4}}>{v.machines} machines · BGT {v.avg_bgt}</span>
+              </div>)}
+            </div>
+          </div>}
+
+          {/* Excel download */}
+          <a href={`${API}/api/plans/${result.token}/excel`} download>
+            <button className="btn btn-green" style={{width:'100%',marginBottom:8}}>⬇️ Download Plan Excel</button>
+          </a>
+
+          {result.skipped > 0 && <div className="alert alert-warn">
+            ⚠️ {result.skipped} DOs could not be allocated — capacity/time exhausted.
+            <details style={{marginTop:4}}><summary style={{cursor:'pointer',fontSize:'.7rem'}}>Show list</summary>
+              <div style={{maxHeight:120,overflowY:'auto',marginTop:4}}>
+                {result.skipped_list?.map((s,i)=><div key={i} style={{fontSize:'.7rem',padding:'2px 0'}}><b>{s.do_no}</b> — {s.reason}</div>)}
+              </div>
+            </details>
+          </div>}
+        </>}
+
+        {result?.error && <div className="alert alert-err">❌ {result.message}</div>}
+      </div>
+    </div>
+
+    {/* Plan details table + Gantt */}
+    {result && !result.error && result.details?.length > 0 && <>
+      <div style={{display:'flex',gap:8,marginBottom:12}}>
+        {['dos','gantt','unallocated'].map(t=><button key={t} className={`btn ${activeDetail===t?'btn-primary':'btn-ghost'} btn-sm`}
+          onClick={()=>setActiveDetail(t)}>
+          {t==='dos'?`DOs (${result.total_dos})`:t==='gantt'?'Gantt View':`Unallocated (${result.skipped})`}
+        </button>)}
+      </div>
+
+      {activeDetail==='dos' && <>
+        <div className="filter-bar">
+          <input placeholder="🔍 Filter DO / SEC / Machine..." value={doFilter} onChange={e=>setDoFilter(e.target.value)} style={{minWidth:220}}/>
+          <span style={{fontSize:'.7rem',color:'var(--muted)'}}>{filteredDos.length} DOs</span>
+        </div>
+        <div className="tbl-wrap">
+          <table className="data-table">
+            <thead><tr>
+              {['Priority','DO No','Floor','SEC','QTY','Picker','Machine','Group','Start','End','Duration','Util%','Over WH'].map(h=><th key={h}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {dos_page.map((d,i)=><tr key={i}>
+                <td><span className="pill pill-plan" style={{background:`rgba(59,130,246,${0.1+d.priority/20})`}}>P{d.priority||d.PRIORITY}</span></td>
+                <td style={{fontWeight:600}}>{d.do_no||d.DO_NO}</td>
+                <td><span className="fl-badge">{d.floor||d.FLOOR}</span></td>
+                <td>{d.sec||d.SEC}</td>
+                <td className="num">{(d.do_qty||d.DO_QTY||0).toLocaleString()}</td>
+                <td className="num">{d.picker_no||d.PICKER_NO}</td>
+                <td>{d.machine_no||d.MACHINE_NO}</td>
+                <td><GrpPill g={d.grp||d.GROUP||'G1'}/></td>
+                <td>{d.start_time||d.START_TIME}</td>
+                <td>{d.end_time||d.END_TIME}</td>
+                <td className="num">{Math.round(d.duration_min||0)}m</td>
+                <td className="num" style={{color:(d.util_pct||0)>=cfg.fill_pct?'var(--green)':'var(--gold)'}}>{d.util_pct||0}%</td>
+                <td>{(d.over_wh||d.OVER_WH)?<span style={{color:'var(--red)'}}>⚠</span>:'—'}</td>
+              </tr>)}
+            </tbody>
+          </table>
+        </div>
+        <Pager page={page} totalPages={totalPages} setPage={setPage} total={filteredDos.length}/>
+      </>}
+
+      {activeDetail==='gantt' && <div className="card">
+        <div className="sec-lbl">Gantt View — Picker Schedule</div>
+        <GanttChart details={result.details} wh_start={cfg.start_min} wh_end={cfg.wh_end}/>
+      </div>}
+
+      {activeDetail==='unallocated' && (result.skipped_list?.length ?
+        <div className="tbl-wrap"><table className="data-table">
+          <thead><tr><th>DO No</th><th>Reason</th></tr></thead>
+          <tbody>{result.skipped_list.map((s,i)=><tr key={i}><td style={{fontWeight:600}}>{s.do_no}</td><td style={{color:'var(--muted)'}}>{s.reason}</td></tr>)}</tbody>
+        </table></div> :
+        <div className="alert alert-ok">✓ All DOs were allocated successfully.</div>)}
+    </>}
+  </div>;
+}
+
+// ── HISTORY TAB ──────────────────────────────────────────────────────────────
+function HistoryTab({toast}) {
+  const [plans,setPlans]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [selToken,setSelToken]=useState(null);
+  const [detail,setDetail]=useState(null);
+  const [detailLoading,setDetailLoading]=useState(false);
+  const [dateFilter,setDateFilter]=useState('');
+  const [confirm,setConfirm]=useState(null);
+
+  const load = async() => {
+    setLoading(true);
+    try { setPlans(await apiFetch('/api/plans')); }
+    catch(e){toast(e.message,'err');}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{load();},[]);
+
+  const loadDetail = async(token) => {
+    setSelToken(token); setDetail(null); setDetailLoading(true);
+    try { setDetail(await apiFetch(`/api/plans/${token}`)); }
+    catch(e){toast(e.message,'err');}
+    finally{setDetailLoading(false);}
+  };
+
+  const cancelPlan = async(token) => {
+    try {
+      await apiFetch(`/api/plans/${token}`,{method:'DELETE'});
+      toast(`Plan ${token} cancelled — DOs are now free to re-plan`,'ok');
+      setConfirm(null); setSelToken(null); setDetail(null); load();
+    } catch(e){toast(e.message,'err');}
+  };
+
+  const filtered = useMemo(()=>{
+    if(!dateFilter) return plans;
+    return plans.filter(p=>p.plan_date===dateFilter);
+  },[plans,dateFilter]);
+
+  // Group by date for multi-run display
+  const byDate = useMemo(()=>{
+    const m={}; filtered.forEach(p=>{ if(!m[p.plan_date])m[p.plan_date]=[]; m[p.plan_date].push(p); }); return m;
+  },[filtered]);
+
+  const STATUS_DOT={'Done':'var(--green)','Planned':'var(--accent)','Delayed':'var(--gold)','Cancelled':'var(--red)','Not Picked':'var(--muted)'};
+
+  return <div className="page" style={{display:'flex',gap:16}}>
+    {confirm && <Confirm title="Cancel Plan" body={`Cancel plan ${confirm}? All DOs will be freed for re-planning on any date.`}
+      onConfirm={()=>cancelPlan(confirm)} onCancel={()=>setConfirm(null)}/>}
+
+    {/* Plan list */}
+    <div style={{width:340,flexShrink:0}}>
+      <div className="sec-lbl">All Plans</div>
+      <div className="form-row" style={{marginBottom:10,gap:8}}>
+        <input type="date" value={dateFilter} onChange={e=>setDateFilter(e.target.value)} style={{flex:1}}/>
+        {dateFilter && <button className="btn btn-ghost btn-sm" onClick={()=>setDateFilter('')}>✕ Clear</button>}
+      </div>
+      {loading ? <div style={{padding:24,textAlign:'center'}}><div className="spin"/></div> :
+        filtered.length===0 ? <div className="alert alert-info">No plans found.</div> :
+        Object.entries(byDate).sort(([a],[b])=>b.localeCompare(a)).map(([date,dplans])=><div key={date} style={{marginBottom:10}}>
+          <div style={{fontSize:'.6rem',fontFamily:'var(--mono)',color:'var(--muted)',padding:'4px 8px',background:'var(--s1)',borderRadius:5,marginBottom:4}}>
+            {date} — {dplans.length} run{dplans.length>1?'s':''}
+          </div>
+          {dplans.map(p=><div key={p.token} className="card-sm" style={{marginBottom:6,cursor:'pointer',
+            border:selToken===p.token?'1px solid var(--accent)':'1px solid var(--border)',transition:'border .15s'}}
+            onClick={()=>loadDetail(p.token)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+              <span style={{fontFamily:'var(--mono)',fontSize:'.78rem',color:selToken===p.token?'var(--accent)':'var(--text)',fontWeight:600}}>{p.token}</span>
+              <span style={{fontSize:'.6rem',color:'var(--muted)'}}>R{p.run_number}</span>
+            </div>
+            <div style={{display:'flex',gap:10,fontSize:'.68rem',color:'var(--muted)'}}>
+              <span>📦 {p.total_dos} DOs</span>
+              <span>⚡ {p.pickers_used} pickers</span>
+              <span>📊 {p.avg_util}% util</span>
+            </div>
+            {p.status_breakdown && <div style={{display:'flex',gap:4,marginTop:6,flexWrap:'wrap'}}>
+              {Object.entries(p.status_breakdown).map(([s,c])=><span key={s} style={{
+                fontSize:'.58rem',padding:'1px 6px',borderRadius:10,fontFamily:'var(--mono)',
+                background:`rgba(255,255,255,.05)`,border:`1px solid ${STATUS_DOT[s]||'#666'}33`,
+                color:STATUS_DOT[s]||'var(--muted)'}}>
+                {s} {c}
+              </span>)}
+            </div>}
+          </div>)}
+        </div>)
+      }
+    </div>
+
+    {/* Detail panel */}
+    <div style={{flex:1}}>
+      {!selToken && <div className="alert alert-info" style={{marginTop:0}}>← Select a plan to view details</div>}
+      {detailLoading && <div style={{textAlign:'center',padding:40}}><div className="spin"/></div>}
+      {detail && <>
+        <div style={{display:'flex',gap:10,marginBottom:14,alignItems:'center'}}>
+          <div className="token-box" style={{flex:1,padding:'12px 16px',textAlign:'left'}}>
+            <div className="token-val" style={{fontSize:'1.4rem'}}>{detail.meta.token}</div>
+            <div style={{fontSize:'.7rem',color:'var(--muted)',marginTop:2}}>{detail.meta.plan_date} · Run #{detail.meta.run_number} · {detail.meta.notes||'—'}</div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <a href={`${API}/api/plans/${selToken}/excel`} download>
+              <button className="btn btn-green btn-sm" style={{whiteSpace:'nowrap'}}>⬇️ Download Excel</button>
+            </a>
+            <button className="btn btn-danger btn-sm" style={{whiteSpace:'nowrap'}} onClick={()=>setConfirm(selToken)}>
+              🗑️ Cancel Plan
+            </button>
+          </div>
+        </div>
+
+        <div className="g5" style={{gap:8,marginBottom:12}}>
+          {[
+            {lbl:'Total DOs',val:detail.meta.total_dos,cls:'blue'},
+            {lbl:'Total QTY',val:(detail.meta.total_qty||0).toLocaleString(),cls:'green'},
+            {lbl:'Pickers',val:detail.meta.pickers_used,cls:'purple'},
+            {lbl:'Avg Util',val:`${detail.meta.avg_util}%`,cls:'gold'},
+            {lbl:'Skipped',val:detail.meta.skipped_dos,cls:'red'},
+          ].map(k=><div key={k.lbl} className={`kpi-card ${k.cls}`}>
+            <div className="kpi-lbl">{k.lbl}</div>
+            <div className="kpi-val" style={{fontSize:'1rem'}}>{k.val}</div>
+          </div>)}
+        </div>
+
+        <div className="tbl-wrap">
+          <table className="data-table">
+            <thead><tr>
+              <th>Status</th><th>DO No</th><th>Floor</th><th>SEC</th>
+              <th>Priority</th><th>QTY</th><th>Picker</th><th>Start</th><th>End</th>
+              <th>Actual Start</th><th>Actual End</th>
+            </tr></thead>
+            <tbody>
+              {detail.details.slice(0,200).map((d,i)=><tr key={i}>
+                <td><StatusPill s={d.status||'Planned'}/></td>
+                <td style={{fontWeight:600}}>{d.do_no}</td>
+                <td><span className="fl-badge">{d.floor}</span></td>
+                <td>{d.sec}</td>
+                <td>P{d.priority}</td>
+                <td className="num">{(d.do_qty||0).toLocaleString()}</td>
+                <td className="num">{d.picker_no}</td>
+                <td>{d.start_time}</td>
+                <td>{d.end_time}</td>
+                <td style={{color:'var(--green)'}}>{d.actual_start||'—'}</td>
+                <td style={{color:'var(--green)'}}>{d.actual_end||'—'}</td>
+              </tr>)}
+            </tbody>
+          </table>
+        </div>
+        {detail.details.length>200 && <div className="hint" style={{textAlign:'center',marginTop:6}}>Showing first 200 of {detail.details.length} rows. Download Excel for full data.</div>}
+      </>}
+    </div>
+  </div>;
+}
+
+// ── ACTUAL TIMES TAB ─────────────────────────────────────────────────────────
+function ActualTimesTab({toast}) {
+  const [plans,setPlans]=useState([]);
+  const [selToken,setSelToken]=useState('');
+  const [detail,setDetail]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [times,setTimes]=useState({});// {do_no: {start,end,date,notes}}
+  const [floorF,setFloorF]=useState('all');
+  const [bulkOpen,setBulkOpen]=useState(false);
+  const [bulkFile,setBulkFile]=useState(null);
+  const [bulkUploading,setBulkUploading]=useState(false);
+
+  useEffect(()=>{
+    apiFetch('/api/plans').then(setPlans).catch(e=>toast(e.message,'err'));
+  },[]);
+
+  const loadDetail = async(token) => {
+    if(!token) return;
+    setLoading(true); setDetail(null); setTimes({});
+    try {
+      const d = await apiFetch(`/api/plans/${token}`);
+      setDetail(d);
+      // Restore saved actuals
+      const t={};
+      d.details.forEach(r=>{
+        if(r.actual_start) t[r.do_no]={start:r.actual_start,end:r.actual_end||'',date:r.actual_date||d.meta.plan_date,notes:r.actual_notes||''};
+      });
+      setTimes(t);
+    } catch(e){toast(e.message,'err');}
+    finally{setLoading(false);}
+  };
+
+  const save = async() => {
+    if(!selToken||!detail) return;
+    setSaving(true);
+    try {
+      const recs=Object.entries(times).filter(([,v])=>v.start&&v.end).map(([do_no,v])=>({
+        do_no, actual_start:v.start, actual_end:v.end,
+        actual_date:v.date||detail.meta.plan_date, actual_qty:0, notes:v.notes||'', plan_date:detail.meta.plan_date
+      }));
+      if(!recs.length){toast('No times filled yet — enter start and end time for at least one DO','err');return;}
+      const res=await apiFetch(`/api/actuals/${selToken}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(recs)});
+      toast(`✓ Saved ${res.saved} actual time records`,'ok');
+      loadDetail(selToken);
+    } catch(e){toast(e.message,'err');}
+    finally{setSaving(false);}
+  };
+
+  const bulkUpload = async() => {
+    if(!bulkFile||!selToken) return;
+    setBulkUploading(true);
+    try {
+      const fd=new FormData(); fd.append('file',bulkFile);
+      const res=await apiFetch(`/api/actuals/${selToken}/bulk-upload`,{method:'POST',body:fd});
+      if(res.success){ toast(`✓ Bulk uploaded ${res.saved} records`,'ok'); loadDetail(selToken); setBulkOpen(false); }
+      else toast(res.message,'err');
+    } catch(e){toast(e.message,'err');}
+    finally{setBulkUploading(false);}
+  };
+
+  const floors = useMemo(()=>{
+    if(!detail) return [];
+    return [...new Set(detail.details.map(d=>d.floor))].sort();
+  },[detail]);
+
+  const rows = useMemo(()=>{
+    if(!detail) return [];
+    return floorF==='all' ? detail.details : detail.details.filter(d=>String(d.floor)===String(floorF));
+  },[detail,floorF]);
+
+  const setTime=(do_no,field,val)=>setTimes(t=>({...t,[do_no]:{...(t[do_no]||{}), [field]:val}}));
+
+  const filledCount = Object.values(times).filter(v=>v.start&&v.end).length;
+
+  return <div className="page">
+    {/* Token selector */}
+    <div className="g2" style={{marginBottom:16,gap:16}}>
+      <div>
+        <div className="sec-lbl">Select Plan</div>
+        <div className="form-row">
+          <div className="form-group" style={{flex:1}}>
+            <select value={selToken} onChange={e=>{setSelToken(e.target.value);loadDetail(e.target.value);}}>
+              <option value="">— Select token —</option>
+              {plans.map(p=><option key={p.token} value={p.token}>{p.token} — {p.plan_date} · {p.total_dos} DOs</option>)}
+            </select>
+          </div>
+          {selToken && <div className="form-group">
+            <label className="form-label">Floor Filter</label>
+            <select value={floorF} onChange={e=>setFloorF(e.target.value)}>
+              <option value="all">All Floors</option>
+              {floors.map(f=><option key={f} value={f}>Floor {f}</option>)}
+            </select>
+          </div>}
+        </div>
+
+        {/* Bulk upload expander */}
+        {selToken && <div className="expander" style={{marginTop:10}}>
+          <div className="exp-hdr" onClick={()=>setBulkOpen(o=>!o)}>
+            <span>📥 Bulk Upload Actuals (Excel Template)</span>
+            <span style={{color:'var(--muted)',fontSize:'.7rem'}}>{bulkOpen?'▲':'▼'}</span>
+          </div>
+          {bulkOpen && <div className="exp-body">
+            <div style={{marginBottom:10,fontSize:'.78rem',color:'var(--muted2)'}}>
+              1. Download the template with plan times pre-filled → 2. Fill ACTUAL_DATE, ACTUAL_START, ACTUAL_END → 3. Re-upload
+            </div>
+            <div style={{display:'flex',gap:8,marginBottom:10}}>
+              <a href={`${API}/api/plans/${selToken}/actuals-template`} download>
+                <button className="btn btn-ghost btn-sm">⬇️ Download Actuals Template</button>
+              </a>
+            </div>
+            <div className="form-group" style={{marginBottom:10}}>
+              <input type="file" accept=".xlsx,.xls" onChange={e=>setBulkFile(e.target.files[0])} style={{fontSize:'.75rem'}}/>
+            </div>
+            <button className="btn btn-primary btn-sm" disabled={!bulkFile||bulkUploading} onClick={bulkUpload}>
+              {bulkUploading?'Uploading...':'💾 Upload & Save'}
+            </button>
+          </div>}
+        </div>}
+      </div>
+
+      {detail && <div>
+        <div className="sec-lbl">Session Status</div>
+        <div className="g3" style={{gap:8}}>
+          {[
+            {lbl:'Total DOs',val:rows.length},
+            {lbl:'Filled',val:filledCount},
+            {lbl:'Remaining',val:rows.length-filledCount},
+          ].map(k=><div key={k.lbl} className="kpi-card blue">
+            <div className="kpi-lbl">{k.lbl}</div>
+            <div className="kpi-val" style={{fontSize:'1.1rem'}}>{k.val}</div>
+          </div>)}
+        </div>
+        <button className="btn btn-primary" style={{marginTop:12,width:'100%'}} disabled={saving||filledCount===0} onClick={save}>
+          {saving?'Saving...':'💾 Save Actual Times'}
+        </button>
+      </div>}
+    </div>
+
+    {loading && <div style={{textAlign:'center',padding:30}}><div className="spin"/></div>}
+
+    {!loading && detail && <>
+      <div className="sec-lbl">Enter Actual Times — {rows.length} DOs {floorF!=='all'?`(Floor ${floorF})`:'(all floors)'}</div>
+      <div className="alert alert-info" style={{marginBottom:10,fontSize:'.72rem'}}>
+        ℹ️ Times default to blank. Only fill rows you want to record. Save button will only process filled rows.
+      </div>
+      <div className="tbl-wrap">
+        <table className="data-table">
+          <thead><tr>
+            <th>Status</th><th>DO No</th><th>Floor</th><th>SEC</th><th>QTY</th>
+            <th>Plan Start</th><th>Plan End</th>
+            <th style={{background:'rgba(16,185,129,.08)',minWidth:100}}>Actual Date</th>
+            <th style={{background:'rgba(16,185,129,.08)',minWidth:90}}>Actual Start</th>
+            <th style={{background:'rgba(16,185,129,.08)',minWidth:90}}>Actual End</th>
+            <th style={{background:'rgba(16,185,129,.08)'}}>Notes</th>
+            <th>Variance</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(d=>{
+              const t=times[d.do_no]||{};
+              const hasFilled=t.start&&t.end;
+              const planDur = (() => { try {const[h1,m1]=d.start_time.split(':').map(Number);const[h2,m2]=d.end_time.split(':').map(Number);return(h2*60+m2)-(h1*60+m1);}catch{return null}})();
+              const actDur  = (() => { try {if(!t.start||!t.end)return null;const[h1,m1]=t.start.split(':').map(Number);const[h2,m2]=t.end.split(':').map(Number);return(h2*60+m2)-(h1*60+m1);}catch{return null}})();
+              const varMin  = (actDur!=null&&planDur!=null) ? actDur-planDur : null;
+              return <tr key={d.do_no} style={hasFilled?{background:'rgba(16,185,129,.04)'}:{}}>
+                <td><StatusPill s={d.status||'Planned'}/></td>
+                <td style={{fontWeight:600}}>{d.do_no}</td>
+                <td><span className="fl-badge">{d.floor}</span></td>
+                <td>{d.sec}</td>
+                <td className="num">{(d.do_qty||0).toLocaleString()}</td>
+                <td style={{color:'var(--accent)',fontFamily:'var(--mono)',fontSize:'.7rem'}}>{d.start_time}</td>
+                <td style={{color:'var(--muted)',fontFamily:'var(--mono)',fontSize:'.7rem'}}>{d.end_time}</td>
+                <td style={{background:'rgba(16,185,129,.04)'}}>
+                  <input type="date" value={t.date||''} onChange={e=>setTime(d.do_no,'date',e.target.value)}
+                    style={{width:110,fontSize:'.72rem',padding:'4px 6px'}}/>
+                </td>
+                <td style={{background:'rgba(16,185,129,.04)'}}>
+                  <input type="time" value={t.start||''} onChange={e=>setTime(d.do_no,'start',e.target.value)}
+                    style={{width:90,fontSize:'.72rem',padding:'4px 6px'}}/>
+                </td>
+                <td style={{background:'rgba(16,185,129,.04)'}}>
+                  <input type="time" value={t.end||''} onChange={e=>setTime(d.do_no,'end',e.target.value)}
+                    style={{width:90,fontSize:'.72rem',padding:'4px 6px'}}/>
+                </td>
+                <td style={{background:'rgba(16,185,129,.04)'}}>
+                  <input type="text" value={t.notes||''} onChange={e=>setTime(d.do_no,'notes',e.target.value)}
+                    placeholder="notes" style={{width:100,fontSize:'.72rem',padding:'4px 6px'}}/>
+                </td>
+                <td style={{fontFamily:'var(--mono)',fontSize:'.68rem',
+                  color:varMin==null?'var(--muted)':Math.abs(varMin)<=5?'var(--green)':varMin>5?'var(--red)':'var(--accent)'}}>
+                  {varMin==null?'—':varMin===0?'On time':varMin>0?`+${varMin}m slow`:`${varMin}m fast`}
+                </td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>}
+  </div>;
+}
+
+// ── ANALYTICS TAB ─────────────────────────────────────────────────────────────
+function AnalyticsTab({toast}) {
+  const [plans,setPlans]=useState([]);
+  const [selToken,setSelToken]=useState('');
+  const [data,setData]=useState(null);
+  const [loading,setLoading]=useState(false);
+
+  useEffect(()=>{apiFetch('/api/plans').then(setPlans).catch(e=>toast(e.message,'err'));},[]);
+
+  const load = async(token) => {
+    setSelToken(token); setData(null); if(!token) return;
+    setLoading(true);
+    try { setData(await apiFetch(`/api/analytics/${token}`)); }
+    catch(e){toast(e.message,'err');}
+    finally{setLoading(false);}
+  };
+
+  const STATUS_CLR={Done:'#10B981',Planned:'#3B82F6',Delayed:'#F59E0B','Not Picked':'#64748B',Cancelled:'#EF4444'};
+  const barW=(v,max)=>max?Math.round(v/max*100)+'%':'0%';
+
+  return <div className="page">
+    <div className="sec-lbl">Select Plan for Analytics</div>
+    <div style={{marginBottom:16}}>
+      <select value={selToken} onChange={e=>load(e.target.value)} style={{minWidth:300}}>
+        <option value="">— Select token —</option>
+        {plans.map(p=><option key={p.token} value={p.token}>{p.token} — {p.plan_date}</option>)}
+      </select>
+    </div>
+
+    {loading && <div style={{textAlign:'center',padding:40}}><div className="spin"/></div>}
+
+    {data && <>
+      {/* Completion ring + KPIs */}
+      <div className="g6" style={{marginBottom:14}}>
+        {[
+          {lbl:'Completion',val:`${data.completion_pct}%`,cls:'green',sub:`${data.status_counts?.Done||0} Done`},
+          {lbl:'Total DOs',val:data.total,cls:'blue'},
+          {lbl:'Done',val:data.status_counts?.Done||0,cls:'green'},
+          {lbl:'Delayed',val:data.status_counts?.Delayed||0,cls:'gold'},
+          {lbl:'Not Picked',val:data.status_counts?.['Not Picked']||0,cls:'purple'},
+          {lbl:'Cancelled',val:data.status_counts?.Cancelled||0,cls:'red'},
+        ].map(k=><div key={k.lbl} className={`kpi-card ${k.cls}`}>
+          <div className="kpi-lbl">{k.lbl}</div>
+          <div className="kpi-val">{k.val}</div>
+          {k.sub && <div className="kpi-sub">{k.sub}</div>}
+        </div>)}
+      </div>
+
+      {/* Status bar chart */}
+      <div className="card" style={{marginBottom:14}}>
+        <div className="sec-lbl">Status Distribution</div>
+        {Object.entries(data.status_counts||{}).map(([s,c])=><div key={s} className="bar-chart-row">
+          <div className="bar-chart-lbl">{s}</div>
+          <div className="bar-chart-bar">
+            <div className="bar-chart-fill" style={{width:barW(c,data.total),background:STATUS_CLR[s]||'#666'}}/>
+            <span className="bar-chart-val">{c}</span>
+          </div>
+          <span style={{fontSize:'.62rem',color:'var(--muted)',width:40}}>{Math.round(c/data.total*100)}%</span>
+        </div>)}
+      </div>
+
+      <div className="g2" style={{gap:14,marginBottom:14}}>
+        {/* Floor Breakdown */}
+        <div className="card">
+          <div className="sec-lbl">Floor Breakdown</div>
+          <table className="data-table" style={{width:'100%'}}>
+            <thead><tr><th>Floor</th><th>Total DOs</th><th>QTY</th><th>Done</th><th>Delayed</th><th>Cancelled</th><th>Not Picked</th></tr></thead>
+            <tbody>
+              {(data.floor_data||[]).map(f=><tr key={f.floor}>
+                <td><span className="fl-badge">{f.floor}</span></td>
+                <td className="num">{f.total}</td>
+                <td className="num">{(f.qty||0).toLocaleString()}</td>
+                <td className="num" style={{color:'var(--green)'}}>{f.done}</td>
+                <td className="num" style={{color:'var(--gold)'}}>{f.delayed}</td>
+                <td className="num" style={{color:'var(--red)'}}>{f.cancelled}</td>
+                <td className="num" style={{color:'var(--muted)'}}>{f.not_picked}</td>
+              </tr>)}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Picker Performance */}
+        <div className="card">
+          <div className="sec-lbl">Picker Performance</div>
+          <div className="tbl-wrap" style={{maxHeight:280}}>
+            <table className="data-table" style={{width:'100%'}}>
+              <thead><tr><th>Floor</th><th>Picker</th><th>Machine</th><th>DOs</th><th>QTY</th><th>Util%</th><th>Done</th></tr></thead>
+              <tbody>
+                {(data.picker_data||[]).map((p,i)=><tr key={i}>
+                  <td><span className="fl-badge">{p.floor}</span></td>
+                  <td className="num">{p.picker}</td>
+                  <td>{p.machine}</td>
+                  <td className="num">{p.dos}</td>
+                  <td className="num">{(p.qty||0).toLocaleString()}</td>
+                  <td className="num" style={{color:p.util>=70?'var(--green)':'var(--gold)'}}>{p.util}%</td>
+                  <td className="num" style={{color:'var(--green)'}}>{p.done}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </>}
+  </div>;
+}
+
+// ── CANCEL / STATUS TAB ───────────────────────────────────────────────────────
+function CancelStatusTab({toast}) {
+  const [plans,setPlans]=useState([]);
+  const [selToken,setSelToken]=useState('');
+  const [detail,setDetail]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [statusChanges,setStatusChanges]=useState({});// {do_no:{status,reason}}
+  const [floorF,setFloorF]=useState('all');
+  const [statusF,setStatusF]=useState('all');
+  const [bulkOpen,setBulkOpen]=useState(false);
+  const [bulkFile,setBulkFile]=useState(null);
+  const [bulkUploading,setBulkUploading]=useState(false);
+  const [bulkAction,setBulkAction]=useState('Cancelled');
+  const [bulkReason,setBulkReason]=useState('');
+
+  const CANCEL_REASONS=['Picker absent','DO cancelled by WH','Merged with another DO',
+    'Stock unavailable','System error','End of shift','Other'];
+  const STATUS_OPTS=['Planned','Done','Delayed','Not Picked','Cancelled'];
+
+  useEffect(()=>{apiFetch('/api/plans').then(setPlans).catch(e=>toast(e.message,'err'));},[]);
+
+  const loadDetail = async(token) => {
+    setSelToken(token); setDetail(null); setStatusChanges({});
+    if(!token) return;
+    setLoading(true);
+    try { setDetail(await apiFetch(`/api/plans/${token}`)); }
+    catch(e){toast(e.message,'err');}
+    finally{setLoading(false);}
+  };
+
+  const rows = useMemo(()=>{
+    if(!detail) return [];
+    let r=detail.details;
+    if(floorF!=='all') r=r.filter(d=>String(d.floor)===String(floorF));
+    if(statusF!=='all') r=r.filter(d=>(d.status||'Planned')===statusF);
+    return r;
+  },[detail,floorF,statusF]);
+
+  const setChg=(do_no,field,val)=>setStatusChanges(s=>({...s,[do_no]:{...(s[do_no]||{}), [field]:val}}));
+
+  const saveAll = async() => {
+    const updates=Object.entries(statusChanges).filter(([,v])=>v.status).map(([do_no,v])=>({do_no,status:v.status,cancel_reason:v.reason||''}));
+    if(!updates.length){toast('No status changes to save','err');return;}
+    setSaving(true);
+    try {
+      const res=await apiFetch(`/api/status/${selToken}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(updates)});
+      toast(`✓ Updated ${res.updated} DOs — Cancelled DOs are now free to re-plan`,'ok');
+      setStatusChanges({}); loadDetail(selToken);
+    } catch(e){toast(e.message,'err');}
+    finally{setSaving(false);}
+  };
+
+  const bulkApply = async() => {
+    const targets=rows.map(d=>({do_no:d.do_no,status:bulkAction,cancel_reason:bulkReason}));
+    setSaving(true);
+    try {
+      const res=await apiFetch(`/api/status/${selToken}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(targets)});
+      toast(`✓ Bulk updated ${res.updated} DOs`,'ok');
+      setStatusChanges({}); loadDetail(selToken);
+    } catch(e){toast(e.message,'err');}
+    finally{setSaving(false);}
+  };
+
+  const bulkUpload = async() => {
+    if(!bulkFile||!selToken) return;
+    setBulkUploading(true);
+    try {
+      const fd=new FormData(); fd.append('file',bulkFile);
+      const res=await apiFetch(`/api/status/${selToken}/bulk-upload`,{method:'POST',body:fd});
+      if(res.success){ toast(`✓ Updated ${res.updated} DOs`,'ok'); loadDetail(selToken); setBulkOpen(false); }
+      else toast(res.message,'err');
+    } catch(e){toast(e.message,'err');}
+    finally{setBulkUploading(false);}
+  };
+
+  const pendingCount=Object.values(statusChanges).filter(v=>v.status).length;
+  const floors=useMemo(()=>detail?[...new Set(detail.details.map(d=>d.floor))].sort():[],[detail]);
+
+  return <div className="page">
+    <div className="alert alert-info" style={{marginBottom:14,fontSize:'.78rem'}}>
+      ℹ️ <b>Cancelled DOs are automatically unlocked</b> for re-planning on any date — immediately after saving changes here or in History tab.
+    </div>
+
+    <div className="g2" style={{gap:16,marginBottom:16}}>
+      <div>
+        <div className="sec-lbl">Select Plan</div>
+        <select value={selToken} onChange={e=>loadDetail(e.target.value)} style={{width:'100%',marginBottom:12}}>
+          <option value="">— Select token —</option>
+          {plans.map(p=><option key={p.token} value={p.token}>{p.token} — {p.plan_date} · {p.total_dos} DOs</option>)}
+        </select>
+
+        {/* Bulk Excel upload */}
+        <div className="expander">
+          <div className="exp-hdr" onClick={()=>setBulkOpen(o=>!o)}>
+            <span>📥 Bulk Status Update (Excel Template)</span>
+            <span style={{color:'var(--muted)',fontSize:'.7rem'}}>{bulkOpen?'▲':'▼'}</span>
+          </div>
+          {bulkOpen && <div className="exp-body">
+            <div style={{fontSize:'.75rem',color:'var(--muted2)',marginBottom:10}}>
+              Download → fill NEW_STATUS + CANCEL_REASON → upload
+            </div>
+            {selToken && <a href={`${API}/api/plans/${selToken}/status-template`} download>
+              <button className="btn btn-ghost btn-sm" style={{marginBottom:10}}>⬇️ Download Status Template</button>
+            </a>}
+            <div className="form-group" style={{marginBottom:10}}>
+              <input type="file" accept=".xlsx,.xls" onChange={e=>setBulkFile(e.target.files[0])} style={{fontSize:'.75rem'}}/>
+            </div>
+            <button className="btn btn-primary btn-sm" disabled={!bulkFile||!selToken||bulkUploading} onClick={bulkUpload}>
+              {bulkUploading?'Uploading...':'💾 Upload & Apply'}
+            </button>
+          </div>}
+        </div>
+      </div>
+
+      {detail && <div>
+        <div className="sec-lbl">Bulk Action — Filtered Rows ({rows.length} DOs)</div>
+        <div className="form-row" style={{gap:8,marginBottom:8}}>
+          <div className="form-group" style={{flex:1}}>
+            <label className="form-label">Set status to</label>
+            <select value={bulkAction} onChange={e=>setBulkAction(e.target.value)}>
+              {STATUS_OPTS.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </div>
+          {(bulkAction==='Cancelled'||bulkAction==='Not Picked')&&<div className="form-group" style={{flex:2}}>
+            <label className="form-label">Reason</label>
+            <select value={bulkReason} onChange={e=>setBulkReason(e.target.value)}>
+              <option value="">— Select reason —</option>
+              {CANCEL_REASONS.map(r=><option key={r}>{r}</option>)}
+            </select>
+          </div>}
+        </div>
+        <button className="btn btn-danger btn-sm" disabled={saving} onClick={bulkApply}>Apply to {rows.length} Filtered DOs</button>
+      </div>}
+    </div>
+
+    {loading && <div style={{textAlign:'center',padding:30}}><div className="spin"/></div>}
+
+    {!loading && detail && <>
+      {/* Filters + save bar */}
+      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:12,flexWrap:'wrap'}}>
+        <select value={floorF} onChange={e=>setFloorF(e.target.value)} style={{height:32}}>
+          <option value="all">All Floors</option>
+          {floors.map(f=><option key={f} value={f}>Floor {f}</option>)}
+        </select>
+        <select value={statusF} onChange={e=>setStatusF(e.target.value)} style={{height:32}}>
+          <option value="all">All Statuses</option>
+          {STATUS_OPTS.map(s=><option key={s}>{s}</option>)}
+        </select>
+        <span style={{fontSize:'.7rem',color:'var(--muted)'}}>{rows.length} DOs shown</span>
+        <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
+          {pendingCount>0&&<span style={{fontSize:'.72rem',color:'var(--gold)'}}>⚠ {pendingCount} unsaved changes</span>}
+          <button className="btn btn-primary btn-sm" disabled={saving||pendingCount===0} onClick={saveAll}>
+            {saving?'Saving...':'💾 Save Changes'}
+          </button>
+        </div>
+      </div>
+
+      <div className="tbl-wrap">
+        <table className="data-table">
+          <thead><tr>
+            <th>DO No</th><th>Floor</th><th>SEC</th><th>Priority</th><th>QTY</th>
+            <th>Current Status</th><th style={{background:'rgba(59,130,246,.08)',minWidth:140}}>New Status</th>
+            <th style={{background:'rgba(59,130,246,.08)',minWidth:180}}>Cancel Reason</th>
+            <th>Cancel At</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(d=>{
+              const chg=statusChanges[d.do_no]||{};
+              const hasChg=!!chg.status;
+              return <tr key={d.do_no} style={hasChg?{background:'rgba(59,130,246,.05)'}:{}}>
+                <td style={{fontWeight:600}}>{d.do_no}</td>
+                <td><span className="fl-badge">{d.floor}</span></td>
+                <td>{d.sec}</td>
+                <td>P{d.priority}</td>
+                <td className="num">{(d.do_qty||0).toLocaleString()}</td>
+                <td><StatusPill s={d.status||'Planned'}/></td>
+                <td style={{background:'rgba(59,130,246,.04)'}}>
+                  <select value={chg.status||''} onChange={e=>setChg(d.do_no,'status',e.target.value)}
+                    style={{width:130,fontSize:'.72rem',padding:'4px 6px',
+                      border:hasChg?'1px solid var(--accent)':'1px solid var(--border2)'}}>
+                    <option value="">— no change —</option>
+                    {STATUS_OPTS.map(s=><option key={s}>{s}</option>)}
+                  </select>
+                </td>
+                <td style={{background:'rgba(59,130,246,.04)'}}>
+                  {(chg.status==='Cancelled'||chg.status==='Not Picked')&&
+                    <select value={chg.reason||''} onChange={e=>setChg(d.do_no,'reason',e.target.value)}
+                      style={{width:170,fontSize:'.72rem',padding:'4px 6px'}}>
+                      <option value="">— reason —</option>
+                      {CANCEL_REASONS.map(r=><option key={r}>{r}</option>)}
+                    </select>}
+                </td>
+                <td style={{fontSize:'.62rem',color:'var(--muted)'}}>{d.cancelled_at?d.cancelled_at.slice(0,10):'—'}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>}
+  </div>;
+}
+
+// ── ROOT APP ──────────────────────────────────────────────────────────────────
+const TABS=[
+  {id:'plan',label:'🏭 New Plan'},
+  {id:'history',label:'📚 History'},
+  {id:'actual',label:'⏱ Actual Times'},
+  {id:'analytics',label:'📊 Analytics'},
+  {id:'cancel',label:'🚫 Cancel / Status'},
+];
+
+function App() {
+  const [tab,setTab]=useState('plan');
+  const {toasts,toast}=useToast();
+
+  return <>
+    <div className="hdr">
+      <div className="logo">PICKER<span>OS</span></div>
+      <div className="hdr-sub">Warehouse Picker Planning System</div>
+      <div className="hdr-right">
+        <span style={{fontFamily:'var(--mono)',fontSize:'.62rem',color:'var(--muted)'}}>v9.0 · FastAPI + React</span>
+      </div>
+    </div>
+    <div className="tabs">
+      {TABS.map(t=><div key={t.id} className={`tab${tab===t.id?' active':''}`} onClick={()=>setTab(t.id)}>{t.label}</div>)}
+    </div>
+    {tab==='plan'     && <NewPlanTab toast={toast}/>}
+    {tab==='history'  && <HistoryTab toast={toast}/>}
+    {tab==='actual'   && <ActualTimesTab toast={toast}/>}
+    {tab==='analytics'&& <AnalyticsTab toast={toast}/>}
+    {tab==='cancel'   && <CancelStatusTab toast={toast}/>}
+    <ToastContainer toasts={toasts}/>
+  </>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

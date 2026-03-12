@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Picker Planning System</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:     #0d1117;
+    --surface: #f5f3ee;
+    --card:    #ffffff;
+    --accent:  #e63946;
+    --accent2: #2b7de9;
+    --gold:    #f5a623;
+    --green:   #1db954;
+    --border:  #e0ddd6;
+    --muted:   #8a8680;
+    --mono:    'JetBrains Mono', monospace;
+    --display: 'Syne', sans-serif;
+    --body:    'DM Sans', sans-serif;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--body);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── GRID BACKGROUND ── */
+  body::before {
+    content:'';
+    position:fixed; inset:0;
+    background-image:
+      linear-gradient(rgba(0,0,0,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,0,0,.04) 1px, transparent 1px);
+    background-size: 32px 32px;
+    pointer-events:none; z-index:0;
+  }
+
+  /* ── HEADER ── */
+  header {
+    position:relative; z-index:10;
+    background: var(--ink);
+    padding: 0 48px;
+    display:flex; align-items:center; justify-content:space-between;
+    height: 64px;
+    border-bottom: 3px solid var(--accent);
+  }
+  .logo {
+    font-family: var(--display);
+    font-size: 1.1rem; font-weight: 800;
+    color: #fff; letter-spacing: -0.5px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .logo-icon {
+    width:32px; height:32px; background:var(--accent);
+    border-radius:6px; display:grid; place-items:center;
+    font-size:16px;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: .65rem; font-weight:700;
+    background: rgba(255,255,255,.1);
+    color: rgba(255,255,255,.6);
+    padding: 3px 8px; border-radius:4px;
+    letter-spacing: 1.5px; text-transform:uppercase;
+  }
+
+  /* ── MAIN LAYOUT ── */
+  main {
+    position:relative; z-index:1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 56px 24px;
+  }
+
+  /* ── HERO ── */
+  .hero {
+    margin-bottom: 56px;
+  }
+  .hero-label {
+    font-family: var(--mono);
+    font-size: .7rem; font-weight:700; letter-spacing:3px;
+    text-transform:uppercase; color: var(--accent);
+    margin-bottom: 16px;
+  }
+  .hero h1 {
+    font-family: var(--display);
+    font-size: clamp(2.4rem, 5vw, 4rem);
+    font-weight: 800; line-height: 1.05;
+    letter-spacing: -2px; color: var(--ink);
+  }
+  .hero h1 em {
+    font-style:normal; color: var(--accent2);
+  }
+  .hero p {
+    margin-top: 16px;
+    font-size: 1.05rem; color: var(--muted);
+    max-width: 520px; line-height:1.6;
+  }
+
+  /* ── UPLOAD ZONE ── */
+  .upload-section { margin-bottom: 48px; }
+
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    background: var(--card);
+    padding: 64px 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .25s ease;
+    position:relative;
+    overflow:hidden;
+  }
+  .drop-zone::before {
+    content:'';
+    position:absolute; inset:0;
+    background: linear-gradient(135deg, rgba(43,125,233,.05) 0%, transparent 60%);
+    opacity:0; transition: opacity .3s;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent2);
+    transform: translateY(-2px);
+    box-shadow: 0 20px 60px rgba(43,125,233,.12);
+  }
+  .drop-zone:hover::before, .drop-zone.drag-over::before { opacity:1; }
+
+  .upload-icon {
+    width:72px; height:72px;
+    background: linear-gradient(135deg, var(--accent2), #1a56c4);
+    border-radius:18px;
+    display:grid; place-items:center;
+    margin: 0 auto 20px;
+    font-size: 28px;
+    box-shadow: 0 8px 32px rgba(43,125,233,.3);
+    transition: transform .3s ease;
+  }
+  .drop-zone:hover .upload-icon { transform: scale(1.08) rotate(2deg); }
+
+  .drop-zone h3 {
+    font-family: var(--display);
+    font-size: 1.3rem; font-weight:700;
+    margin-bottom: 8px;
+  }
+  .drop-zone p { color:var(--muted); font-size:.9rem; }
+  .drop-zone p span {
+    color:var(--accent2); font-weight:500; cursor:pointer;
+    text-decoration:underline; text-underline-offset:3px;
+  }
+
+  #fileInput { display:none; }
+
+  .file-info {
+    display:none;
+    margin-top:20px;
+    background: #f0f7ff;
+    border: 1px solid rgba(43,125,233,.2);
+    border-radius:10px;
+    padding:14px 20px;
+    display:none; align-items:center; gap:12px;
+  }
+  .file-info.visible { display:flex; }
+  .file-info-icon { font-size:24px; }
+  .file-info-name {
+    font-family:var(--mono); font-size:.85rem; font-weight:500; color:var(--ink);
+    flex:1;
+  }
+  .file-info-size { font-size:.8rem; color:var(--muted); }
+
+  .btn-process {
+    display:block; width:100%;
+    margin-top:24px; padding:18px;
+    background: var(--ink);
+    color:#fff;
+    border:none; border-radius:12px;
+    font-family:var(--display); font-size:1rem; font-weight:700;
+    letter-spacing:-0.3px;
+    cursor:pointer;
+    transition: all .2s;
+    position:relative; overflow:hidden;
+  }
+  .btn-process::after {
+    content:''; position:absolute; inset:0;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.1),transparent);
+    transform:translateX(-100%); transition:transform .5s;
+  }
+  .btn-process:hover { background:#1e2a3a; transform:translateY(-1px); box-shadow:0 8px 24px rgba(0,0,0,.2); }
+  .btn-process:hover::after { transform:translateX(100%); }
+  .btn-process:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+
+  /* ── PROGRESS ── */
+  .progress-section {
+    display:none; margin-bottom:32px;
+    background:var(--card); border-radius:16px;
+    padding:32px; border:1px solid var(--border);
+  }
+  .progress-section.visible { display:block; }
+  .progress-label {
+    font-family:var(--mono); font-size:.75rem; font-weight:700;
+    letter-spacing:2px; text-transform:uppercase; color:var(--muted);
+    margin-bottom:12px;
+  }
+  .progress-bar-bg {
+    height:8px; background:#eee; border-radius:8px; overflow:hidden;
+  }
+  .progress-bar-fill {
+    height:100%; width:0%;
+    background:linear-gradient(90deg, var(--accent2), var(--green));
+    border-radius:8px; transition:width .4s ease;
+  }
+  .progress-steps {
+    display:flex; gap:8px; margin-top:20px; flex-wrap:wrap;
+  }
+  .step {
+    font-family:var(--mono); font-size:.7rem;
+    padding:5px 12px; border-radius:20px;
+    background:#f0f0f0; color:var(--muted);
+    transition:all .3s;
+  }
+  .step.active { background:var(--accent2); color:#fff; }
+  .step.done { background:var(--green); color:#fff; }
+
+  /* ── RESULTS ── */
+  .results-section { display:none; }
+  .results-section.visible { display:block; }
+
+  .results-header {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:32px; flex-wrap:wrap; gap:16px;
+  }
+  .results-title {
+    font-family:var(--display);
+    font-size:1.8rem; font-weight:800; letter-spacing:-1px;
+  }
+  .btn-download {
+    display:flex; align-items:center; gap:8px;
+    padding:12px 24px;
+    background:var(--green);
+    color:#fff; border:none; border-radius:10px;
+    font-family:var(--display); font-size:.95rem; font-weight:700;
+    cursor:pointer; transition:all .2s;
+    text-decoration:none;
+  }
+  .btn-download:hover { background:#18a347; transform:translateY(-1px); box-shadow:0 6px 20px rgba(29,185,84,.3); }
+
+  /* KPI GRID */
+  .kpi-grid {
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+    gap:16px; margin-bottom:32px;
+  }
+  .kpi-card {
+    background:var(--card); border:1px solid var(--border);
+    border-radius:14px; padding:24px 20px;
+    position:relative; overflow:hidden;
+    transition: transform .2s, box-shadow .2s;
+  }
+  .kpi-card:hover { transform:translateY(-3px); box-shadow:0 12px 40px rgba(0,0,0,.08); }
+  .kpi-card::before {
+    content:''; position:absolute; top:0; left:0; right:0;
+    height:3px;
+  }
+  .kpi-card:nth-child(1)::before { background:var(--accent2); }
+  .kpi-card:nth-child(2)::before { background:var(--accent); }
+  .kpi-card:nth-child(3)::before { background:var(--gold); }
+  .kpi-card:nth-child(4)::before { background:var(--green); }
+  .kpi-card:nth-child(5)::before { background:#9b59b6; }
+  .kpi-card:nth-child(6)::before { background:#e67e22; }
+
+  .kpi-label {
+    font-family:var(--mono); font-size:.68rem; font-weight:700;
+    text-transform:uppercase; letter-spacing:1.5px; color:var(--muted);
+    margin-bottom:10px;
+  }
+  .kpi-value {
+    font-family:var(--display); font-size:2rem; font-weight:800;
+    letter-spacing:-1px; line-height:1;
+  }
+  .kpi-sub { font-size:.78rem; color:var(--muted); margin-top:6px; }
+
+  /* FLOOR TABLE */
+  .section-title {
+    font-family:var(--display); font-size:1.1rem; font-weight:700;
+    letter-spacing:-.5px; margin-bottom:16px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .section-title::after {
+    content:''; flex:1; height:1px; background:var(--border);
+  }
+
+  .table-wrap {
+    background:var(--card); border:1px solid var(--border);
+    border-radius:14px; overflow:hidden;
+    margin-bottom:32px;
+  }
+  table { width:100%; border-collapse:collapse; }
+  thead tr { background:var(--ink); }
+  thead th {
+    padding:14px 18px; text-align:left;
+    font-family:var(--mono); font-size:.72rem;
+    font-weight:700; letter-spacing:1.5px;
+    text-transform:uppercase; color:rgba(255,255,255,.7);
+  }
+  tbody tr { border-top:1px solid var(--border); transition:background .15s; }
+  tbody tr:hover { background:#f8f7f5; }
+  tbody td { padding:13px 18px; font-size:.9rem; }
+  .mono-td { font-family:var(--mono); font-size:.82rem; }
+
+  .util-pill {
+    display:inline-flex; align-items:center;
+    padding:3px 10px; border-radius:20px;
+    font-family:var(--mono); font-size:.75rem; font-weight:700;
+  }
+  .util-high  { background:#d4edda; color:#155724; }
+  .util-mid   { background:#fff3cd; color:#856404; }
+  .util-low   { background:#f8d7da; color:#721c24; }
+
+  /* PLAN TABLE */
+  .plan-table-wrap {
+    background:var(--card); border:1px solid var(--border);
+    border-radius:14px; overflow:hidden;
+    margin-bottom:32px; overflow-x:auto;
+  }
+  .plan-table-wrap table thead th:first-child,
+  .plan-table-wrap table tbody td:first-child { padding-left:24px; }
+
+  /* FLOOR badge */
+  .floor-badge {
+    display:inline-block;
+    width:28px; height:28px;
+    border-radius:6px;
+    background:var(--accent2);
+    color:#fff; text-align:center; line-height:28px;
+    font-family:var(--mono); font-size:.8rem; font-weight:700;
+  }
+  .floor-0 { background:#2b7de9; }
+  .floor-1 { background:#e63946; }
+  .floor-2 { background:#f5a623; color:var(--ink); }
+  .floor-3 { background:#1db954; }
+  .floor-4 { background:#9b59b6; }
+
+  /* ERROR */
+  .error-box {
+    display:none; background:#fff5f5; border:1.5px solid #fca5a5;
+    border-radius:12px; padding:20px 24px;
+    font-family:var(--mono); font-size:.85rem; color:#991b1b;
+    margin-bottom:24px;
+  }
+  .error-box.visible { display:block; }
+
+  /* ANIMATIONS */
+  @keyframes fadeUp {
+    from { opacity:0; transform:translateY(20px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
+  .animate { animation: fadeUp .5s ease both; }
+  .animate-d1 { animation-delay:.1s; }
+  .animate-d2 { animation-delay:.2s; }
+  .animate-d3 { animation-delay:.3s; }
+
+  /* RESPONSIVE */
+  @media(max-width:640px) {
+    header { padding:0 20px; }
+    main   { padding:32px 16px; }
+    .hero h1 { font-size:2rem; letter-spacing:-1px; }
+    thead th, tbody td { padding:10px 12px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">🏭</div>
+    Picker Planning System
+  </div>
+  <span class="badge">V2 Retail DC</span>
+</header>
+
+<main>
+  <!-- HERO -->
+  <div class="hero animate">
+    <div class="hero-label">// Warehouse Allocation Engine</div>
+    <h1>Daily Picker<br><em>Plan Generator</em></h1>
+    <p>Upload your DO + Machine Excel template. The system allocates scanners to picking tasks across floors and sections, optimised for full-day utilisation.</p>
+  </div>
+
+  <!-- UPLOAD -->
+  <div class="upload-section animate animate-d1">
+    <div class="drop-zone" id="dropZone">
+      <div class="upload-icon">📂</div>
+      <h3>Drop your Excel file here</h3>
+      <p>Supports .xlsx format &nbsp;·&nbsp; <span onclick="document.getElementById('fileInput').click()">Browse files</span></p>
+      <input type="file" id="fileInput" accept=".xlsx,.xls">
+    </div>
+
+    <div class="file-info" id="fileInfo">
+      <span class="file-info-icon">📊</span>
+      <span class="file-info-name" id="fileInfoName">—</span>
+      <span class="file-info-size" id="fileInfoSize"></span>
+    </div>
+
+    <button class="btn-process" id="btnProcess" disabled onclick="processFile()">
+      ⚡ Generate Picker Plan
+    </button>
+  </div>
+
+  <!-- ERROR -->
+  <div class="error-box" id="errorBox"></div>
+
+  <!-- PROGRESS -->
+  <div class="progress-section" id="progressSection">
+    <div class="progress-label">Processing…</div>
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-steps">
+      <div class="step" id="s1">📥 Reading file</div>
+      <div class="step" id="s2">🔢 Aggregating DOs</div>
+      <div class="step" id="s3">🧮 Calculating capacity</div>
+      <div class="step" id="s4">📋 Allocating pickers</div>
+      <div class="step" id="s5">📝 Building report</div>
+      <div class="step" id="s6">✅ Done</div>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div class="results-section" id="resultsSection">
+    <div class="results-header animate">
+      <div class="results-title">📊 Plan Results</div>
+      <button class="btn-download" id="btnDownload">
+        ⬇️ Download Excel Report
+      </button>
+    </div>
+
+    <!-- KPIs -->
+    <div class="kpi-grid" id="kpiGrid"></div>
+
+    <!-- Floor breakdown -->
+    <div class="section-title">Floor Breakdown</div>
+    <div class="table-wrap animate animate-d1">
+      <table>
+        <thead>
+          <tr>
+            <th>Floor</th>
+            <th>Total QTY</th>
+            <th>Required Pickers</th>
+            <th>Assigned Pickers</th>
+            <th>Avg Utilisation</th>
+          </tr>
+        </thead>
+        <tbody id="floorTableBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Plan preview -->
+    <div class="section-title">Allocation Plan (top 20 rows)</div>
+    <div class="plan-table-wrap animate animate-d2">
+      <table>
+        <thead>
+          <tr>
+            <th>Machine</th>
+            <th>Scanner</th>
+            <th>Grp</th>
+            <th>Floor</th>
+            <th>SEC</th>
+            <th>QTY</th>
+            <th>Start</th>
+            <th>End</th>
+            <th>Utilisation</th>
+            <th>Remaining</th>
+          </tr>
+        </thead>
+        <tbody id="planTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+let selectedFile = null;
+let excelB64    = null;
+
+// ── FILE SELECTION ─────────────────────────────────────────────────────────────
+const dropZone  = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', ()=> dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop',      e => { e.preventDefault(); dropZone.classList.remove('drag-over'); setFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change',   e => setFile(e.target.files[0]));
+
+function setFile(file) {
+  if (!file) return;
+  selectedFile = file;
+  document.getElementById('fileInfoName').textContent = file.name;
+  document.getElementById('fileInfoSize').textContent = (file.size/1024).toFixed(1) + ' KB';
+  document.getElementById('fileInfo').classList.add('visible');
+  document.getElementById('btnProcess').disabled = false;
+  document.getElementById('resultsSection').classList.remove('visible');
+  document.getElementById('errorBox').classList.remove('visible');
+}
+
+// ── PROCESS ────────────────────────────────────────────────────────────────────
+async function processFile() {
+  if (!selectedFile) return;
+
+  const btn = document.getElementById('btnProcess');
+  btn.disabled = true;
+  btn.textContent = '⏳ Processing…';
+  document.getElementById('errorBox').classList.remove('visible');
+  document.getElementById('resultsSection').classList.remove('visible');
+
+  const ps = document.getElementById('progressSection');
+  ps.classList.add('visible');
+  runProgressAnimation();
+
+  const formData = new FormData();
+  formData.append('file', selectedFile);
+
+  try {
+    const res  = await fetch('/process', { method:'POST', body:formData });
+    const data = await res.json();
+
+    completeProgress();
+    await sleep(600);
+    ps.classList.remove('visible');
+    resetProgress();
+
+    if (!data.success) throw new Error(data.error || 'Unknown error');
+
+    excelB64 = data.excel_b64;
+    renderResults(data.summary);
+    document.getElementById('resultsSection').classList.add('visible');
+    document.getElementById('resultsSection').scrollIntoView({ behavior:'smooth', block:'start' });
+
+  } catch(err) {
+    ps.classList.remove('visible');
+    resetProgress();
+    const eb = document.getElementById('errorBox');
+    eb.textContent = '⚠ Error: ' + err.message;
+    eb.classList.add('visible');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ Generate Picker Plan';
+  }
+}
+
+// ── PROGRESS ANIMATION ─────────────────────────────────────────────────────────
+let progTimer = null;
+const steps = ['s1','s2','s3','s4','s5'];
+const progs  = [15, 35, 55, 75, 92];
+
+function runProgressAnimation() {
+  let i=0;
+  progTimer = setInterval(()=>{
+    if(i < steps.length) {
+      document.getElementById(steps[i]).classList.add('active');
+      document.getElementById('progressFill').style.width = progs[i]+'%';
+      if(i>0) document.getElementById(steps[i-1]).classList.replace('active','done');
+      i++;
+    } else clearInterval(progTimer);
+  }, 400);
+}
+function completeProgress() {
+  clearInterval(progTimer);
+  steps.forEach(s => { const el=document.getElementById(s); el.classList.remove('active'); el.classList.add('done'); });
+  document.getElementById('s6').classList.add('done');
+  document.getElementById('progressFill').style.width='100%';
+}
+function resetProgress() {
+  clearInterval(progTimer);
+  [...steps,'s6'].forEach(s => { const el=document.getElementById(s); el.classList.remove('active','done'); });
+  document.getElementById('progressFill').style.width='0%';
+}
+const sleep = ms => new Promise(r => setTimeout(r,ms));
+
+// ── RENDER RESULTS ─────────────────────────────────────────────────────────────
+function renderResults(s) {
+  const kpis = [
+    { label:'Total DO Lines',       value: s.total_dos.toLocaleString(),          sub:'dispatched orders' },
+    { label:'Total QTY',            value: s.total_qty.toLocaleString(),           sub:'units to pick' },
+    { label:'BGT / Picker',         value: s.bgt_per_picker.toLocaleString(),      sub:'daily capacity' },
+    { label:'Pickers Required',     value: s.req_pickers,                          sub:'calculated need' },
+    { label:'Pickers Used',         value: s.pickers_used,                         sub:'actually assigned' },
+    { label:'Plan Rows',            value: s.plan_rows,                            sub:'task allocations' },
+  ];
+  const grid = document.getElementById('kpiGrid');
+  grid.innerHTML = kpis.map(k => `
+    <div class="kpi-card">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value">${k.value}</div>
+      <div class="kpi-sub">${k.sub}</div>
+    </div>`).join('');
+
+  // Floor table
+  const floorColors = ['floor-0','floor-1','floor-2','floor-3','floor-4'];
+  const ftb = document.getElementById('floorTableBody');
+  ftb.innerHTML = s.floor_breakdown.map(r => {
+    const util = r.AVG_UTIL || r.avg_util || 0;
+    const utilClass = util>=95?'util-high':(util>=70?'util-mid':'util-low');
+    const fc = floorColors[r.FLOOR] || 'floor-0';
+    return `<tr>
+      <td><span class="floor-badge ${fc}">${r.FLOOR}</span></td>
+      <td class="mono-td">${(r.TOTAL_QTY||r.total_qty||0).toLocaleString()}</td>
+      <td class="mono-td">${r.REQ_PICKERS||r.req_pickers||0}</td>
+      <td class="mono-td">${Math.round(r.ASSIGNED||r.assigned||0)}</td>
+      <td><span class="util-pill ${utilClass}">${Number(util).toFixed(1)}%</span></td>
+    </tr>`;
+  }).join('');
+
+  // Plan preview
+  const ptb = document.getElementById('planTableBody');
+  ptb.innerHTML = s.top_rows.map(r => {
+    const util = r['UTILIZATION_%'] || 0;
+    const uc   = util>=95?'util-high':(util>=70?'util-mid':'util-low');
+    const fc   = floorColors[r.FLOOR] || 'floor-0';
+    return `<tr>
+      <td class="mono-td">${r.MACHINE_NO}</td>
+      <td>${r.SCANNER_NAME}</td>
+      <td class="mono-td">${r.GROUP}</td>
+      <td><span class="floor-badge ${fc}">${r.FLOOR}</span></td>
+      <td class="mono-td">${r.SEC}</td>
+      <td class="mono-td">${(r.TOTAL_DO_QTY_ASSIGNED||0).toLocaleString()}</td>
+      <td class="mono-td">${r.START_TIME}</td>
+      <td class="mono-td">${r.END_TIME}</td>
+      <td><span class="util-pill ${uc}">${Number(util).toFixed(1)}%</span></td>
+      <td class="mono-td">${(r.REMAINING_CAPACITY||0).toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+
+  // Download button
+  document.getElementById('btnDownload').onclick = () => {
+    const link = document.createElement('a');
+    link.href     = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + excelB64;
+    link.download = 'Picker_Plan_Output.xlsx';
+    link.click();
+  };
+}
+</script>
+</body>
+</html>
