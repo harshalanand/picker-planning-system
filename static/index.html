@@ -24,18 +24,30 @@ html,body,#root{height:100%;background:var(--bg);color:var(--text);font-family:v
 ::-webkit-scrollbar-thumb{background:var(--b3);border-radius:2px}
 .layout{display:flex;height:100vh;overflow:hidden}
 /* SIDEBAR */
-.sb{width:var(--sb);background:var(--s1);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto}
-.sb-logo{padding:14px 14px 10px;border-bottom:1px solid var(--border)}
-.sb-title{font-family:var(--mono);font-size:.9rem;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--a3));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.sb-sub{font-size:.58rem;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.08em}
-.sb-sec{padding:10px 10px 3px;font-size:.52rem;text-transform:uppercase;letter-spacing:.16em;color:var(--muted);font-weight:700}
-.sb-item{display:flex;align-items:center;gap:9px;padding:7px 12px;cursor:pointer;border-radius:6px;margin:1px 5px;transition:all .15s;font-size:.78rem;font-weight:500;color:var(--m2)}
+.sb{width:var(--sb);background:var(--s1);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto;transition:width .22s cubic-bezier(.4,0,.2,1)}
+.sb.collapsed{width:54px}
+.sb-logo{padding:12px 12px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:6px;overflow:hidden;min-height:52px}
+.sb-logo-txt{min-width:0;flex:1;overflow:hidden}
+.sb-title{font-family:var(--mono);font-size:.9rem;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--a3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;white-space:nowrap}
+.sb-sub{font-size:.58rem;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
+.sb-toggle{flex-shrink:0;background:transparent;border:1px solid var(--b2);border-radius:5px;color:var(--muted);cursor:pointer;font-size:.7rem;padding:4px 6px;transition:all .15s;line-height:1}
+.sb-toggle:hover{border-color:var(--accent);color:var(--accent)}
+.sb-sec{padding:10px 10px 3px;font-size:.52rem;text-transform:uppercase;letter-spacing:.16em;color:var(--muted);font-weight:700;white-space:nowrap;overflow:hidden;transition:opacity .15s}
+.sb.collapsed .sb-sec{opacity:0;height:0;padding:0;margin:0}
+.sb-item{display:flex;align-items:center;gap:9px;padding:7px 12px;cursor:pointer;border-radius:6px;margin:1px 5px;transition:all .15s;font-size:.78rem;font-weight:500;color:var(--m2);white-space:nowrap;overflow:hidden;position:relative}
 .sb-item:hover{background:var(--card2);color:var(--text)}
 .sb-item.on{background:rgba(59,130,246,.12);color:var(--accent);font-weight:600}
 .sb-ico{font-size:.9rem;width:18px;text-align:center;flex-shrink:0}
-.sb-badge{margin-left:auto;background:var(--accent);color:#fff;font-size:.52rem;padding:1px 5px;border-radius:8px;font-family:var(--mono);font-weight:700}
+.sb-lbl{transition:opacity .15s,width .15s;overflow:hidden}
+.sb.collapsed .sb-lbl{opacity:0;width:0}
+.sb-badge{margin-left:auto;background:var(--accent);color:#fff;font-size:.52rem;padding:1px 5px;border-radius:8px;font-family:var(--mono);font-weight:700;transition:opacity .15s}
+.sb.collapsed .sb-badge{opacity:0;width:0;padding:0;margin:0}
 .sb-badge.r{background:var(--red)}.sb-badge.g{background:var(--green)}.sb-badge.o{background:var(--gold);color:#000}
-.sb-foot{margin-top:auto;padding:10px 13px;border-top:1px solid var(--border);font-size:.6rem;color:var(--muted)}
+/* Tooltip on collapsed sidebar items */
+.sb.collapsed .sb-item::after{content:attr(data-tip);position:absolute;left:54px;background:var(--card2);border:1px solid var(--b2);color:var(--text);font-size:.72rem;padding:4px 9px;border-radius:6px;white-space:nowrap;pointer-events:none;opacity:0;z-index:999;transition:opacity .15s}
+.sb.collapsed .sb-item:hover::after{opacity:1}
+.sb-foot{margin-top:auto;padding:10px 13px;border-top:1px solid var(--border);font-size:.6rem;color:var(--muted);overflow:hidden}
+.sb.collapsed .sb-foot-txt{display:none}
 .sb-div{border:none;border-top:1px solid var(--border);margin:5px 8px}
 /* MAIN */
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
@@ -353,25 +365,63 @@ function DemandTable({dos,cfg}){
 }
 
 // ── MACHINE GROUP CARDS ───────────────────────────────────────────────────────
-function MachineGroups({grp_summary,cfg}){
+function MachineGroups({grp_summary,cfg}){return null;} // replaced by MachineAvailability
+
+function MachineAvailability({grp_summary,floor_avail,floor_required,summary,cfg}){
   if(!grp_summary||!Object.keys(grp_summary).length)return null;
-  const total=Object.values(grp_summary).reduce((s,v)=>s+(v.machines||0),0);
-  const surplus=total-(grp_summary._req||0);
-  return<div className="g4" style={{gap:9,marginBottom:11}}>
-    {[['G1','var(--green)','BGT ≥ 3,000','Top priority DOs'],['G2','var(--accent)','BGT ≥ 2,000','Mid priority DOs'],['G3','var(--gold)','BGT ≥ 1,000','Low priority DOs']].map(([g,col,desc,sub])=>{
-      const v=grp_summary[g]||{machines:0};
-      return<div key={g} className="kpi" style={{borderLeft:`2px solid ${col}`,padding:'10px 13px'}}>
-        <div className="kl" style={{display:'flex',alignItems:'center',gap:5}}><GPill g={g}/> {g} Group</div>
-        <div className="kv" style={{color:col,fontSize:'1.3rem'}}>{v.machines}</div>
-        <div className="ks">{desc}</div>
-        <div style={{fontSize:'.56rem',color:'var(--muted)',marginTop:2}}>{sub}</div>
-      </div>;
-    })}
-    <div className={`kpi ${surplus>=0?'gr':'re'}`} style={{padding:'10px 13px'}}>
-      <div className="kl">Total Pool</div>
-      <div className="kv">{total}</div>
-      <div className="ks">{surplus>=0?`+${surplus} surplus`:`${Math.abs(surplus)} short`}</div>
+  const total=summary?.total_machines||Object.values(grp_summary).reduce((s,v)=>s+(v.machines||0),0);
+  const g1=grp_summary.G1||{machines:0};const g2=grp_summary.G2||{machines:0};const g3=grp_summary.G3||{machines:0};
+  const totalReq=Object.values(floor_required||{}).reduce((s,v)=>s+(v.required||0),0);
+  const surplus=total-totalReq;
+  const gCols={G1:'var(--green)',G2:'var(--accent)',G3:'var(--gold)'};
+  const floors=Object.keys(floor_required||{}).map(Number).sort();
+  return<div style={{marginBottom:13}}>
+    {/* Top summary row */}
+    <div className="g5" style={{gap:8,marginBottom:10}}>
+      {[
+        {l:'Total Machines',v:total,c:'bl',s:`${summary?.avg_bgt?.toLocaleString()||'?'} avg BGT`},
+        {l:'G1 Machines',v:g1.machines,c:'gr',s:`BGT ≥ 3,000 · avg ${g1.avg_bgt?.toLocaleString()||'?'}`},
+        {l:'G2 Machines',v:g2.machines,c:'cy',s:`BGT ≥ 2,000 · avg ${g2.avg_bgt?.toLocaleString()||'?'}`},
+        {l:'G3 Machines',v:g3.machines,c:'go',s:`BGT ≥ 1,000 · avg ${g3.avg_bgt?.toLocaleString()||'?'}`},
+        {l:surplus>=0?'Pool Surplus':'Pool Deficit',v:surplus>=0?`+${surplus}`:`${surplus}`,c:surplus>=0?'gr':'re',s:`${totalReq} required for ${cfg.fill_pct}% fill`},
+      ].map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 12px'}}>
+        <div className="kl">{k.l}</div>
+        <div className="kv" style={{fontSize:'1.2rem',color:k.c==='re'?'var(--red)':k.c==='gr'?'var(--green)':undefined}}>{k.v}</div>
+        <div className="ks">{k.s}</div>
+      </div>)}
     </div>
+
+    {/* Per-floor availability vs required */}
+    {floors.length>0&&<div className="card" style={{padding:'12px 14px'}}>
+      <div style={{fontSize:'.6rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.12em',marginBottom:9,fontWeight:700}}>Machine Availability vs Demand — Per Floor</div>
+      <div style={{display:'grid',gridTemplateColumns:'50px 1fr 80px 80px 90px 130px',gap:6,marginBottom:5,fontSize:'.53rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:700}}>
+        <span>Floor</span><span>Load Bar</span><span className="n" style={{textAlign:'right'}}>Required</span><span className="n" style={{textAlign:'right'}}>Available</span><span className="n" style={{textAlign:'right'}}>Surplus</span><span>G1/G2/G3 Mix</span>
+      </div>
+      {floors.map(f=>{
+        const fr=floor_required[f]||{required:0,available:0,surplus:0};
+        const fa=floor_avail?.[f]||{};
+        const pct=Math.min(100,Math.round(fr.required/Math.max(1,fr.available)*100));
+        const col=pct<=70?'var(--green)':pct<=100?'var(--gold)':'var(--red)';
+        return<div key={f} style={{display:'grid',gridTemplateColumns:'50px 1fr 80px 80px 90px 130px',gap:6,alignItems:'center',padding:'5px 0',borderBottom:'1px solid rgba(26,37,53,.6)'}}>
+          <span><FL f={f}/></span>
+          <div>
+            <div className="pb" style={{height:12}}>
+              <div className="pbf" style={{width:`${pct}%`,background:col}}/>
+              <span style={{position:'absolute',left:6,top:'50%',transform:'translateY(-50%)',fontSize:'.52rem',color:'rgba(255,255,255,.8)',fontFamily:'var(--mono)',fontWeight:700}}>{pct}% loaded</span>
+            </div>
+          </div>
+          <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.7rem',color:'var(--a3)',fontWeight:700}}>{fr.required}</span>
+          <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.7rem',color:'var(--t2)'}}>{fr.available}</span>
+          <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.7rem',fontWeight:700,color:fr.surplus>=0?'var(--green)':'var(--red)'}}>{fr.surplus>=0?`+${fr.surplus}`:fr.surplus}</span>
+          <span style={{display:'flex',gap:4}}>
+            {fa.G1>0&&<span style={{background:'rgba(16,185,129,.15)',color:'var(--green)',border:'1px solid rgba(16,185,129,.3)',borderRadius:4,padding:'1px 5px',fontSize:'.57rem',fontFamily:'var(--mono)',fontWeight:700}}>G1:{fa.G1}</span>}
+            {fa.G2>0&&<span style={{background:'rgba(59,130,246,.15)',color:'var(--accent)',border:'1px solid rgba(59,130,246,.3)',borderRadius:4,padding:'1px 5px',fontSize:'.57rem',fontFamily:'var(--mono)',fontWeight:700}}>G2:{fa.G2}</span>}
+            {fa.G3>0&&<span style={{background:'rgba(245,158,11,.15)',color:'var(--gold)',border:'1px solid rgba(245,158,11,.3)',borderRadius:4,padding:'1px 5px',fontSize:'.57rem',fontFamily:'var(--mono)',fontWeight:700}}>G3:{fa.G3}</span>}
+            {!fa.G1&&!fa.G2&&!fa.G3&&<span style={{fontSize:'.6rem',color:'var(--muted)'}}>pool shared</span>}
+          </span>
+        </div>;
+      })}
+    </div>}
   </div>;
 }
 
@@ -481,7 +531,7 @@ function SettingsPage({cfg,setCfg,toast}){
 // ── NEW PLAN PAGE ────────────────────────────────────────────────────────────
 function NewPlanPage({cfg,toast}){
   const[file,setFile]=useState(null);const[parsed,setParsed]=useState(null);
-  const[loading,setLoading]=useState(false);const[gen,setGen]=useState(false);
+  const[loading,setLoading]=useState(false);const[gen,setGen]=useState(false);const[floorAvail,setFloorAvail]=useState({});const[floorReq,setFloorReq]=useState({});
   const[date_,setDate]=useState(new Date().toISOString().slice(0,10));
   const[notes,setNotes]=useState('');const[result,setResult]=useState(null);
   const[drag,setDrag]=useState(false);const[sub,setSub]=useState('dos');
@@ -491,7 +541,7 @@ function NewPlanPage({cfg,toast}){
 
   const upload=async f=>{
     if(!f)return;setFile(f);setParsed(null);setResult(null);setLoading(true);
-    try{const fd=new FormData();fd.append('file',f);const d=await apiFetch('/api/excel/parse',{method:'POST',body:fd});setParsed(d);toast(`✓ ${d.summary.total_dos} DOs · ${d.summary.machines} machines`,'ok');}
+    try{const fd=new FormData();fd.append('file',f);const d=await apiFetch('/api/excel/parse',{method:'POST',body:fd});setParsed(d);setFloorAvail(d.floor_avail||{});setFloorReq(d.floor_required||{});toast(`✓ ${d.summary.total_dos} DOs · ${d.summary.total_machines||d.summary.machines} machines · G1:${d.summary.g1_count||0} G2:${d.summary.g2_count||0} G3:${d.summary.g3_count||0}`,'ok');}
     catch(e){toast(e.message,'err');}finally{setLoading(false);}
   };
 
@@ -580,8 +630,8 @@ function NewPlanPage({cfg,toast}){
       {/* RIGHT */}
       <div>
         {parsed&&!result&&<>
-          <div className="sec">Machine Groups</div>
-          <MachineGroups grp_summary={parsed.grp_summary} cfg={cfg}/>
+          <div className="sec">Machine Pool — Available vs Required</div>
+          <MachineAvailability grp_summary={parsed.grp_summary} floor_avail={floorAvail} floor_required={floorReq} summary={parsed.summary} cfg={cfg}/>
           <div className="sec">Demand Analysis — Floor Breakdown</div>
           <DemandTable dos={parsed.dos} cfg={cfg}/>
         </>}
@@ -598,7 +648,7 @@ function NewPlanPage({cfg,toast}){
               {l:'Skipped',v:result.skipped,c:result.skipped>0?'re':'gr'},{l:'Excluded',v:result.excluded_count||0,c:result.excluded_count>0?'go':'gr'}]
               .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}><div className="kl">{k.l}</div><div className="kv" style={{fontSize:'1.05rem'}}>{k.v}</div></div>)}
           </div>
-          {result.grp_summary&&<MachineGroups grp_summary={result.grp_summary} cfg={cfg}/>}
+          {result.grp_summary&&<MachineAvailability grp_summary={result.grp_summary} floor_avail={floorAvail} floor_required={floorReq} summary={parsed?.summary} cfg={cfg}/>}
           <a href={`${API}/api/plans/${result.token}/excel`} download style={{display:'block'}}>
             <button className="btn btn-gr btn-fw" style={{marginBottom:6}}>⬇️ Download Plan Excel (4 sheets)</button>
           </a>
@@ -1302,29 +1352,44 @@ function App(){
   useEffect(()=>{apiFetch('/api/plans').then(p=>setPlanCnt(p.length)).catch(()=>{});},[page]);
   const m2t=m=>`${String(m/60|0).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
   const grps=[...new Set(NAV.map(n=>n.grp))];
+  const[collapsed,setCollapsed]=useState(()=>{try{return localStorage.getItem('sb_collapsed')==='1';}catch{return false;}});
+  const toggleSb=()=>{const n=!collapsed;setCollapsed(n);try{localStorage.setItem('sb_collapsed',n?'1':'0');}catch{}};
   return<div className="layout">
-    <aside className="sb">
+    <aside className={`sb${collapsed?' collapsed':''}`}>
       <div className="sb-logo">
-        <div className="sb-title">PickerOS</div>
-        <div className="sb-sub">Warehouse Planning System</div>
+        {!collapsed&&<div className="sb-logo-txt">
+          <div className="sb-title">PickerOS</div>
+          <div className="sb-sub">Warehouse Planning System</div>
+        </div>}
+        {collapsed&&<div style={{margin:'0 auto',fontSize:'1.1rem'}}>🏭</div>}
+        <button className="sb-toggle" onClick={toggleSb} title={collapsed?'Expand sidebar':'Collapse sidebar'}>
+          {collapsed?'›':'‹'}
+        </button>
       </div>
       {grps.map(g=><div key={g}>
-        <div className="sb-sec">{g}</div>
-        {NAV.filter(n=>n.grp===g).map(n=><div key={n.id} className={`sb-item${page===n.id?' on':''}`} onClick={()=>setPage(n.id)}>
-          <span className="sb-ico">{n.ico}</span><span>{n.lbl}</span>
+        {!collapsed&&<div className="sb-sec">{g}</div>}
+        {NAV.filter(n=>n.grp===g).map(n=><div key={n.id} data-tip={n.lbl} className={`sb-item${page===n.id?' on':''}`} onClick={()=>setPage(n.id)} title={collapsed?n.lbl:''}>
+          <span className="sb-ico">{n.ico}</span>
+          <span className="sb-lbl">{n.lbl}</span>
           {n.id==='history'&&planCnt!==null&&<span className="sb-badge">{planCnt}</span>}
         </div>)}
-        <hr className="sb-div"/>
+        {!collapsed&&<hr className="sb-div"/>}
+        {collapsed&&<div style={{height:6}}/>}
       </div>)}
       <div className="sb-foot">
-        <div style={{marginBottom:2}}>v9.0 · FastAPI + React</div>
-        <div style={{fontSize:'.56rem',display:'flex',alignItems:'center',gap:4}}>
-          <span style={{width:6,height:6,borderRadius:'50%',background:'var(--green)',display:'inline-block'}}/>
-          API connected · SQLite WAL
-        </div>
-        <div style={{marginTop:3,fontSize:'.56rem',color:'var(--b3)'}}>
-          BGT:{cfg.bgt.toLocaleString()} · Fill:{cfg.fill_pct}% · {m2t(cfg.start_min)}–{m2t(cfg.wh_end)} · Eff:{cfg.eff_min}m
-        </div>
+        {!collapsed&&<div className="sb-foot-txt">
+          <div style={{marginBottom:2}}>v9.0 · FastAPI + React</div>
+          <div style={{fontSize:'.56rem',display:'flex',alignItems:'center',gap:4}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'var(--green)',display:'inline-block'}}/>
+            API connected · SQLite WAL
+          </div>
+          <div style={{marginTop:3,fontSize:'.56rem',color:'var(--b3)'}}>
+            BGT:{cfg.bgt.toLocaleString()} · Fill:{cfg.fill_pct}% · {m2t(cfg.start_min)}–{m2t(cfg.wh_end)} · Eff:{cfg.eff_min}m
+          </div>
+        </div>}
+        {collapsed&&<div style={{textAlign:'center',padding:'2px 0'}}>
+          <span style={{width:7,height:7,borderRadius:'50%',background:'var(--green)',display:'inline-block'}}/>
+        </div>}
       </div>
     </aside>
     <div className="main">

@@ -289,11 +289,20 @@ def allocate(do_df,machine_df,cfg,demand,prev_state=None,skip_dos=None):
 
     mdf=machine_df.copy()
     mdf.columns=[c.strip().upper().replace(' ','_').replace('/','_') for c in mdf.columns]
+    # Deduplicate columns — duplicate names after normalisation cause DataFrame-assignment errors
+    mdf = mdf.loc[:, ~mdf.columns.duplicated(keep='first')]
     sc=next((c for c in mdf.columns if 'SCAN' in c),None)
     if sc and sc!='SCANNER_NAME': mdf.rename(columns={sc:'SCANNER_NAME'},inplace=True)
     mdf=mdf.drop_duplicates(subset=['MACHINE_NO'],keep='first').reset_index(drop=True)
-    bgt_col='BGT_PICKER' if 'BGT_PICKER' in mdf.columns else None
-    mdf['BGT_MACHINE']=mdf[bgt_col].fillna(BGT_DEF).astype(int) if bgt_col else BGT_DEF
+    # Find BGT column — try BGT_PICKER, then BGT, then BUDGET, then CAPACITY
+    bgt_col=next((c for c in ['BGT_PICKER','BGT','BUDGET','CAPACITY'] if c in mdf.columns),None)
+    if bgt_col:
+        bgt_series = mdf[bgt_col]
+        # Guard: if it somehow became a DataFrame (multi-col), take first col
+        if isinstance(bgt_series, pd.DataFrame): bgt_series = bgt_series.iloc[:,0]
+        mdf['BGT_MACHINE'] = pd.to_numeric(bgt_series, errors='coerce').fillna(BGT_DEF).astype(int)
+    else:
+        mdf['BGT_MACHINE'] = BGT_DEF
     mdf['GROUP'],mdf['GROUP_TIER']=zip(*mdf['BGT_MACHINE'].apply(auto_group))
     mdf=mdf.sort_values(['GROUP_TIER','BGT_MACHINE'],ascending=[True,False]).reset_index(drop=True)
     all_m=mdf.to_dict('records')
@@ -573,20 +582,68 @@ async def parse_excel(file: UploadFile = File(...)):
         if 'SEC' not in do_df.columns:
             do_df['SEC'] = 'A'
 
+        mc_df.columns = [str(c).strip().upper().replace(' ','_').replace('/','_') for c in mc_df.columns]
+        # Deduplicate columns
+        mc_df = mc_df.loc[:, ~mc_df.columns.duplicated(keep='first')]
         mc_df = mc_df.dropna(subset=['MACHINE_NO'])
-        if 'BGT_PICKER' not in mc_df.columns: mc_df['BGT_PICKER'] = 3000
+        mc_df = mc_df.drop_duplicates(subset=['MACHINE_NO'], keep='first').reset_index(drop=True)
+
+        # Find BGT column
+        bgt_col = next((c for c in ['BGT_PICKER','BGT','BUDGET','CAPACITY'] if c in mc_df.columns), None)
+        BGT_DEF_PARSE = 3000
+        if bgt_col:
+            bgt_s = mc_df[bgt_col]
+            if isinstance(bgt_s, pd.DataFrame): bgt_s = bgt_s.iloc[:,0]
+            mc_df['BGT_PICKER'] = pd.to_numeric(bgt_s, errors='coerce').fillna(BGT_DEF_PARSE).astype(int)
+        else:
+            mc_df['BGT_PICKER'] = BGT_DEF_PARSE
+
+        # Compute groups
+        mc_df['GROUP'] = mc_df['BGT_PICKER'].apply(lambda b: 'G1' if b>=3000 else ('G2' if b>=2000 else 'G3'))
+
+        # Machine availability summary per floor (if FLOOR column exists in machine sheet)
+        floor_avail = {}
+        if 'FLOOR' in mc_df.columns:
+            for f, grp in mc_df.groupby('FLOOR'):
+                floor_avail[int(f)] = {'machines': len(grp), 'G1': int((grp['GROUP']=='G1').sum()),
+                    'G2': int((grp['GROUP']=='G2').sum()), 'G3': int((grp['GROUP']=='G3').sum()),
+                    'avg_bgt': int(grp['BGT_PICKER'].mean())}
+
+        # Group summary
+        grp_summary = {}
+        for g, grp in mc_df.groupby('GROUP'):
+            grp_summary[g] = {'machines': len(grp), 'avg_bgt': int(grp['BGT_PICKER'].mean()),
+                              'bgt_sum': int(grp['BGT_PICKER'].sum())}
+
+        # Required machines estimate per floor (based on DO demand)
+        floor_required = {}
+        if 'FLOOR' in do_df.columns:
+            fill_pct = 70  # default
+            bgt_def = int(mc_df['BGT_PICKER'].mean()) if len(mc_df) else 3000
+            for f, grp in do_df.groupby('FLOOR'):
+                qty = int(grp['DO_QTY'].sum())
+                import math; req = max(1, math.ceil(qty / (bgt_def * fill_pct / 100)))
+                avail = floor_avail.get(int(f), {}).get('machines', len(mc_df))
+                floor_required[int(f)] = {'required': req, 'available': avail, 'surplus': avail - req}
 
         summary = {
             'total_dos': len(do_df), 'total_qty': int(do_df['DO_QTY'].sum()),
             'floors': sorted([int(f) for f in do_df['FLOOR'].unique()]),
             'priorities': sorted([int(p) for p in do_df['PRIORITY'].unique()]),
-            'machines': len(mc_df),
-            'do_sheet': do_sheet, 'mac_sheet': mac_sheet
+            'machines': len(mc_df), 'total_machines': len(mc_df),
+            'do_sheet': do_sheet, 'mac_sheet': mac_sheet,
+            'g1_count': int((mc_df['GROUP']=='G1').sum()),
+            'g2_count': int((mc_df['GROUP']=='G2').sum()),
+            'g3_count': int((mc_df['GROUP']=='G3').sum()),
+            'avg_bgt': int(mc_df['BGT_PICKER'].mean()),
         }
         return {
             'dos': json.loads(do_df.to_json(orient='records')),
             'machines': json.loads(mc_df.to_json(orient='records')),
-            'summary': summary
+            'summary': summary,
+            'grp_summary': grp_summary,
+            'floor_avail': floor_avail,
+            'floor_required': floor_required,
         }
     except Exception as e:
         raise HTTPException(400, f"Excel parse error: {e}")
