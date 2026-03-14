@@ -8,10 +8,15 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-import sqlite3, json, io, os, math, traceback
-from datetime import datetime, date
+import sqlite3, json, io, os, math, traceback, secrets, smtplib
+from datetime import datetime, date, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import pandas as pd
 import numpy as np
+from passlib.context import CryptContext
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -87,6 +92,32 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_pd_date   ON plan_details(plan_date);
     CREATE INDEX IF NOT EXISTS idx_act_token ON actual_times(token);
     CREATE INDEX IF NOT EXISTS idx_pds_date  ON picker_day_state(plan_date);
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        hashed_pw TEXT NOT NULL,
+        role TEXT DEFAULT 'operator',
+        email TEXT DEFAULT '',
+        created_at TEXT,
+        active INTEGER DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS email_config (
+        id INTEGER PRIMARY KEY,
+        smtp_host TEXT DEFAULT '',
+        smtp_port INTEGER DEFAULT 587,
+        smtp_user TEXT DEFAULT '',
+        smtp_pass TEXT DEFAULT '',
+        from_addr TEXT DEFAULT '',
+        enabled INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS email_schedule (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        report_type TEXT NOT NULL,
+        frequency TEXT NOT NULL,
+        recipients TEXT DEFAULT '',
+        enabled INTEGER DEFAULT 1,
+        last_sent TEXT DEFAULT ''
+    );
     """)
     # Migrate existing DB
     existing = {r[1] for r in conn.execute("PRAGMA table_info(plan_details)").fetchall()}
@@ -99,12 +130,77 @@ def init_db():
 
 init_db()
 
+# ─── Seed default admin if no users exist ────────────────────────────────────
+def seed_admin():
+    conn = get_db()
+    cnt = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if cnt == 0:
+        conn.execute("INSERT INTO users(username,hashed_pw,role,email,created_at) VALUES(?,?,?,?,?)",
+                     ('admin', hash_pw('admin123'), 'admin', '', datetime.now().isoformat()))
+        conn.commit()
+    cnt2 = conn.execute("SELECT COUNT(*) FROM email_config").fetchone()[0]
+    if cnt2 == 0:
+        conn.execute("INSERT INTO email_config(id,smtp_host,smtp_port,smtp_user,smtp_pass,from_addr,enabled) VALUES(1,'',587,'','','',0)")
+        conn.commit()
+    conn.close()
+seed_admin()
+
 # ─── Status Constants ─────────────────────────────────────────────────────────
 STATUS_OPTS = ['Planned', 'Done', 'Delayed', 'Not Picked', 'Cancelled']
 STATUS_COLORS = {
     'Done':'#2ECC71','Planned':'#4F8EF7','Delayed':'#F39C12',
     'Not Picked':'#7A8099','Cancelled':'#E74C3C'
 }
+
+# ─── Auth ────────────────────────────────────────────────────────────────────
+SECRET_KEY = os.environ.get('PICKER_SECRET', secrets.token_hex(32))
+pwd_ctx    = CryptContext(schemes=["bcrypt"], deprecated="auto")
+bearer     = HTTPBearer(auto_error=False)
+
+ROLES = {'admin': 3, 'operator': 2, 'viewer': 1}
+
+def hash_pw(pw):  return pwd_ctx.hash(pw)
+def verify_pw(pw, h): return pwd_ctx.verify(pw, h)
+
+def make_token_jwt(user_id, role):
+    import hmac, hashlib, base64
+    header  = base64.urlsafe_b64encode(json.dumps({'alg':'HS256','typ':'JWT'}).encode()).rstrip(b'=').decode()
+    payload = base64.urlsafe_b64encode(json.dumps({
+        'sub': str(user_id), 'role': role,
+        'exp': (datetime.utcnow() + timedelta(hours=12)).isoformat()
+    }).encode()).rstrip(b'=').decode()
+    sig_input = f"{header}.{payload}".encode()
+    sig = base64.urlsafe_b64encode(hmac.new(SECRET_KEY.encode(), sig_input, hashlib.sha256).digest()).rstrip(b'=').decode()
+    return f"{header}.{payload}.{sig}"
+
+def verify_token_jwt(token):
+    try:
+        import hmac, hashlib, base64
+        parts = token.split('.')
+        if len(parts) != 3: return None
+        header, payload, sig = parts
+        sig_input = f"{header}.{payload}".encode()
+        expected = base64.urlsafe_b64encode(hmac.new(SECRET_KEY.encode(), sig_input, hashlib.sha256).digest()).rstrip(b'=').decode()
+        if sig != expected: return None
+        pad = lambda s: s + '=' * (-len(s) % 4)
+        data = json.loads(base64.urlsafe_b64decode(pad(payload)))
+        if datetime.fromisoformat(data['exp']) < datetime.utcnow(): return None
+        return data
+    except: return None
+
+def get_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)):
+    if not creds: return None
+    return verify_token_jwt(creds.credentials)
+
+def require_operator(user=Depends(get_current_user)):
+    if not user or ROLES.get(user.get('role',''),0) < 2:
+        raise HTTPException(401, 'Login required (operator or admin)')
+    return user
+
+def require_admin(user=Depends(get_current_user)):
+    if not user or ROLES.get(user.get('role',''),0) < 3:
+        raise HTTPException(401, 'Admin access required')
+    return user
 
 # ─── Time Helpers ─────────────────────────────────────────────────────────────
 def m2t(m): t=int(round(m)); return f"{t//60:02d}:{t%60:02d}"
@@ -119,10 +215,11 @@ def adv(clock,dur,ls,le):
     e=clock+dur
     if clock<ls<e: e+=(le-ls)
     return e
-def auto_group(bgt):
+_G_THRESHOLDS = {'g1_min': 3000, 'g2_min': 2000}  # overridden from cfg in allocate()
+def auto_group(bgt, g1_min=3000, g2_min=2000):
     bgt=int(bgt)
-    if bgt>=3000: return 'G1',1
-    if bgt>=2000: return 'G2',2
+    if bgt>=g1_min: return 'G1',1
+    if bgt>=g2_min: return 'G2',2
     return 'G3',3
 
 # ─── DB Helpers ───────────────────────────────────────────────────────────────
@@ -447,7 +544,8 @@ def allocate(do_df, machine_df, cfg, demand, prev_state=None, skip_dos=None, pla
     else:
         mdf['BGT_MACHINE'] = BGT_DEF
 
-    mdf['GROUP'], mdf['GROUP_TIER'] = zip(*mdf['BGT_MACHINE'].apply(auto_group))
+    g1m=int(cfg.get('g1_min',3000)); g2m=int(cfg.get('g2_min',2000))
+    mdf['GROUP'], mdf['GROUP_TIER'] = zip(*mdf['BGT_MACHINE'].apply(lambda b: auto_group(b, g1m, g2m)))
     # Sort by BGT descending — highest capacity machines get lowest picker index
     mdf = mdf.sort_values('BGT_MACHINE', ascending=False).reset_index(drop=True)
     all_m = mdf.to_dict('records')
@@ -1162,6 +1260,417 @@ def api_analytics(token: str):
 def api_locked_dos():
     locked = get_globally_locked_dos()
     return {'count': len(locked), 'dos': list(locked)[:100]}
+
+# ─── Auth Endpoints ───────────────────────────────────────────────────────────
+@app.post("/api/auth/login")
+def api_login(body: dict):
+    username = str(body.get('username',''))
+    password = str(body.get('password',''))
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE username=? AND active=1", (username,)).fetchone()
+    conn.close()
+    if not row or not verify_pw(password, row['hashed_pw']):
+        raise HTTPException(401, "Invalid username or password")
+    token = make_token_jwt(row['id'], row['role'])
+    return {'token': token, 'username': row['username'], 'role': row['role']}
+
+@app.get("/api/auth/me")
+def api_me(user=Depends(get_current_user)):
+    if not user: raise HTTPException(401, "Not authenticated")
+    return user
+
+# ─── User Management ──────────────────────────────────────────────────────────
+@app.get("/api/users")
+def api_list_users(user=Depends(require_admin)):
+    conn = get_db()
+    rows = conn.execute("SELECT id,username,role,email,created_at,active FROM users ORDER BY id").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/users")
+def api_create_user(body: dict, user=Depends(require_admin)):
+    username = str(body.get('username','')).strip()
+    password = str(body.get('password','admin123')).strip()
+    role     = str(body.get('role','operator'))
+    email    = str(body.get('email','')).strip()
+    if not username: raise HTTPException(400, "Username required")
+    if role not in ROLES: raise HTTPException(400, f"Role must be one of: {list(ROLES)}")
+    conn = get_db()
+    try:
+        conn.execute("INSERT INTO users(username,hashed_pw,role,email,created_at) VALUES(?,?,?,?,?)",
+                     (username, hash_pw(password), role, email, datetime.now().isoformat()))
+        conn.commit()
+    except Exception as e:
+        conn.close(); raise HTTPException(400, f"Username already exists: {e}")
+    conn.close()
+    return {'success': True, 'username': username, 'role': role}
+
+@app.put("/api/users/{uid}")
+def api_update_user(uid: int, body: dict, user=Depends(require_admin)):
+    conn = get_db()
+    if 'password' in body and body['password']:
+        conn.execute("UPDATE users SET hashed_pw=? WHERE id=?", (hash_pw(body['password']), uid))
+    if 'role' in body:
+        conn.execute("UPDATE users SET role=? WHERE id=?", (body['role'], uid))
+    if 'email' in body:
+        conn.execute("UPDATE users SET email=? WHERE id=?", (body['email'], uid))
+    if 'active' in body:
+        conn.execute("UPDATE users SET active=? WHERE id=?", (int(body['active']), uid))
+    conn.commit(); conn.close()
+    return {'success': True}
+
+@app.delete("/api/users/{uid}")
+def api_delete_user(uid: int, user=Depends(require_admin)):
+    conn = get_db()
+    conn.execute("UPDATE users SET active=0 WHERE id=?", (uid,))
+    conn.commit(); conn.close()
+    return {'success': True}
+
+# ─── Email Config ──────────────────────────────────────────────────────────────
+@app.get("/api/email/config")
+def api_get_email_config(user=Depends(require_admin)):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM email_config WHERE id=1").fetchone()
+    conn.close()
+    if not row: return {}
+    d = dict(row); d.pop('smtp_pass', None)  # never return password
+    return d
+
+@app.post("/api/email/config")
+def api_save_email_config(body: dict, user=Depends(require_admin)):
+    conn = get_db()
+    conn.execute("""UPDATE email_config SET smtp_host=?,smtp_port=?,smtp_user=?,
+        smtp_pass=CASE WHEN ?!='' THEN ? ELSE smtp_pass END,
+        from_addr=?,enabled=? WHERE id=1""",
+        (body.get('smtp_host',''), int(body.get('smtp_port',587)),
+         body.get('smtp_user',''), body.get('smtp_pass',''), body.get('smtp_pass',''),
+         body.get('from_addr',''), int(body.get('enabled',0))))
+    conn.commit(); conn.close()
+    return {'success': True}
+
+@app.post("/api/email/test")
+def api_test_email(body: dict, user=Depends(require_admin)):
+    conn = get_db()
+    cfg_row = conn.execute("SELECT * FROM email_config WHERE id=1").fetchone()
+    conn.close()
+    if not cfg_row or not cfg_row['smtp_host']:
+        raise HTTPException(400, "Email not configured")
+    try:
+        send_email(dict(cfg_row), body.get('to',''), 'PickerOS Test Email', '<p>Test from PickerOS</p>')
+        return {'success': True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.get("/api/email/schedules")
+def api_get_schedules(user=Depends(require_admin)):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM email_schedule ORDER BY id").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/email/schedules")
+def api_save_schedule(body: dict, user=Depends(require_admin)):
+    conn = get_db()
+    if body.get('id'):
+        conn.execute("UPDATE email_schedule SET report_type=?,frequency=?,recipients=?,enabled=? WHERE id=?",
+                     (body['report_type'],body['frequency'],body.get('recipients',''),int(body.get('enabled',1)),body['id']))
+    else:
+        conn.execute("INSERT INTO email_schedule(report_type,frequency,recipients,enabled) VALUES(?,?,?,?)",
+                     (body['report_type'],body['frequency'],body.get('recipients',''),int(body.get('enabled',1))))
+    conn.commit(); conn.close()
+    return {'success': True}
+
+@app.delete("/api/email/schedules/{sid}")
+def api_del_schedule(sid: int, user=Depends(require_admin)):
+    conn = get_db(); conn.execute("DELETE FROM email_schedule WHERE id=?", (sid,)); conn.commit(); conn.close()
+    return {'success': True}
+
+# ─── Dashboard Endpoint ────────────────────────────────────────────────────────
+@app.get("/api/dashboard")
+def api_dashboard():
+    conn = get_db()
+    today = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+    month_start = date.today().replace(day=1).isoformat()
+
+    def safe(q, *a):
+        try: return conn.execute(q,a).fetchone()[0] or 0
+        except: return 0
+
+    result = {
+        'today': {
+            'plans':       safe("SELECT COUNT(*) FROM plans WHERE plan_date=?", today),
+            'dos_total':   safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')!='Cancelled'", today),
+            'done':        safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND status='Done'", today),
+            'delayed':     safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND status='Delayed'", today),
+            'pending':     safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')='Planned'", today),
+            'cancelled':   safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND status='Cancelled'", today),
+            'qty_done':    safe("SELECT COALESCE(SUM(do_qty),0) FROM plan_details WHERE plan_date=? AND status IN ('Done','Delayed')", today),
+            'qty_total':   safe("SELECT COALESCE(SUM(do_qty),0) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')!='Cancelled'", today),
+        },
+        'yesterday': {
+            'done':        safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND status='Done'", yesterday),
+            'pending':     safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')='Planned'", yesterday),
+            'total':       safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')!='Cancelled'", yesterday),
+        },
+        'mtd': {
+            'plans':       safe("SELECT COUNT(*) FROM plans WHERE plan_date>=?", month_start),
+            'dos_done':    safe("SELECT COUNT(*) FROM plan_details WHERE plan_date>=? AND status IN ('Done','Delayed')", month_start),
+            'dos_total':   safe("SELECT COUNT(*) FROM plan_details WHERE plan_date>=? AND COALESCE(status,'Planned')!='Cancelled'", month_start),
+            'qty_done':    safe("SELECT COALESCE(SUM(do_qty),0) FROM plan_details WHERE plan_date>=? AND status IN ('Done','Delayed')", month_start),
+        },
+        'wtd': {
+            'dos_done':    safe("SELECT COUNT(*) FROM plan_details WHERE plan_date>=? AND status IN ('Done','Delayed')", week_start),
+            'dos_total':   safe("SELECT COUNT(*) FROM plan_details WHERE plan_date>=? AND COALESCE(status,'Planned')!='Cancelled'", week_start),
+        },
+        'total': {
+            'plans':       safe("SELECT COUNT(*) FROM plans"),
+            'dos':         safe("SELECT COUNT(*) FROM plan_details WHERE COALESCE(status,'Planned')!='Cancelled'"),
+            'done':        safe("SELECT COUNT(*) FROM plan_details WHERE status='Done'"),
+            'machines':    safe("SELECT COUNT(DISTINCT machine_no) FROM plan_details"),
+        },
+        'last_7_days': [],
+        'scanner_perf': [],
+        'floor_summary': [],
+        'recent_plans': [],
+    }
+
+    # Last 7 days trend
+    for i in range(6, -1, -1):
+        d = (date.today() - timedelta(days=i)).isoformat()
+        total = safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')!='Cancelled'", d)
+        done  = safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND status IN ('Done','Delayed')", d)
+        result['last_7_days'].append({'date': d, 'total': total, 'done': done,
+            'pct': round(done/max(total,1)*100,1)})
+
+    # Scanner (machine) performance - MTD
+    rows = conn.execute("""
+        SELECT machine_no, scanner_name,
+               COUNT(*) as dos,
+               SUM(do_qty) as qty,
+               SUM(CASE WHEN status='Done' THEN 1 ELSE 0 END) as done,
+               ROUND(AVG(util_pct),1) as avg_util
+        FROM plan_details
+        WHERE plan_date>=? AND COALESCE(status,'Planned')!='Cancelled'
+        GROUP BY machine_no, scanner_name
+        ORDER BY dos DESC LIMIT 20
+    """, (month_start,)).fetchall()
+    result['scanner_perf'] = [dict(r) for r in rows]
+
+    # Floor summary - today
+    rows2 = conn.execute("""
+        SELECT floor,
+               COUNT(*) as total,
+               SUM(CASE WHEN status='Done' THEN 1 ELSE 0 END) as done,
+               SUM(CASE WHEN COALESCE(status,'Planned')='Planned' THEN 1 ELSE 0 END) as pending,
+               SUM(CASE WHEN status='Cancelled' THEN 1 ELSE 0 END) as cancelled,
+               SUM(do_qty) as qty
+        FROM plan_details WHERE plan_date=?
+        GROUP BY floor ORDER BY floor
+    """, (today,)).fetchall()
+    result['floor_summary'] = [dict(r) for r in rows2]
+
+    # Recent plans
+    rows3 = conn.execute("""
+        SELECT p.token, p.plan_date, p.run_number, p.total_dos, p.avg_util, p.created_at,
+               COUNT(CASE WHEN pd.status='Done' THEN 1 END) as done_count
+        FROM plans p LEFT JOIN plan_details pd ON p.token=pd.token
+        GROUP BY p.token ORDER BY p.created_at DESC LIMIT 10
+    """).fetchall()
+    result['recent_plans'] = [dict(r) for r in rows3]
+
+    conn.close()
+    return result
+
+# ─── Download DOs by status ────────────────────────────────────────────────────
+@app.get("/api/export/dos")
+def api_export_dos(token: Optional[str]=None, date_from: Optional[str]=None,
+                   date_to: Optional[str]=None, status: Optional[str]=None,
+                   floor: Optional[int]=None):
+    conn = get_db()
+    q = "SELECT pd.*, at.actual_start, at.actual_end, at.actual_date FROM plan_details pd LEFT JOIN actual_times at ON pd.token=at.token AND pd.do_no=at.do_no WHERE 1=1"
+    params = []
+    if token:     q += " AND pd.token=?";     params.append(token)
+    if date_from: q += " AND pd.plan_date>=?"; params.append(date_from)
+    if date_to:   q += " AND pd.plan_date<=?"; params.append(date_to)
+    if status:    q += " AND COALESCE(pd.status,'Planned')=?"; params.append(status)
+    if floor is not None: q += " AND pd.floor=?"; params.append(floor)
+    q += " ORDER BY pd.plan_date, pd.floor, pd.priority, pd.do_no"
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    if not rows: raise HTTPException(404, "No DOs found matching filters")
+    wb = Workbook(); ws = wb.active; ws.title = 'DO_EXPORT'
+    def hf(): return Font(name='Arial', size=9, bold=True, color='FFFFFFFF')
+    def fl(h): return PatternFill('solid', start_color='FF'+h.lstrip('#'), end_color='FF'+h.lstrip('#'))
+    headers = ['TOKEN','PLAN_DATE','FLOOR','PRIORITY','DO_NO','SEC','DO_QTY','PICKER_NO',
+               'MACHINE_NO','SCANNER','GRP','BGT','START_TIME','END_TIME','STATUS',
+               'CANCEL_REASON','ACTUAL_DATE','ACTUAL_START','ACTUAL_END']
+    for ci, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=ci, value=h)
+        c.font = hf(); c.fill = fl('1E3A5F')
+        c.alignment = Alignment(horizontal='center')
+        ws.column_dimensions[get_column_letter(ci)].width = 14
+    STATUS_COLORS_XL = {'Done':'C8F7C5','Delayed':'FDEBD0','Cancelled':'FADBD8',
+                        'Not Picked':'D5D8DC','Planned':'D6EAF8'}
+    for row in rows:
+        r = dict(row)
+        st = r.get('status','Planned') or 'Planned'
+        bg = STATUS_COLORS_XL.get(st, 'FFFFFF')
+        vals = [r.get('token',''), r.get('plan_date',''), r.get('floor',''),
+                r.get('priority',''), r.get('do_no',''), r.get('sec',''),
+                r.get('do_qty',0), r.get('picker_no',0), r.get('machine_no',''),
+                r.get('scanner_name',''), r.get('grp',''), r.get('bgt_machine',0),
+                r.get('start_time',''), r.get('end_time',''), st,
+                r.get('cancel_reason',''), r.get('actual_date',''),
+                r.get('actual_start',''), r.get('actual_end','')]
+        ws.append(vals)
+        for ci in range(1, len(headers)+1):
+            ws.cell(row=ws.max_row, column=ci).fill = fl(bg)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f"DO_Export_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(io.BytesIO(buf.getvalue()),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'})
+
+# ─── Analytics date-range endpoint ────────────────────────────────────────────
+@app.get("/api/analytics/summary")
+def api_analytics_summary(date_from: Optional[str]=None, date_to: Optional[str]=None):
+    conn = get_db()
+    q_plans = "SELECT * FROM plans WHERE 1=1"
+    q_det   = "SELECT pd.* FROM plan_details pd WHERE 1=1"
+    params = []
+    if date_from:
+        q_plans += " AND plan_date>=?"; q_det += " AND pd.plan_date>=?"; params.append(date_from)
+    if date_to:
+        q_plans += " AND plan_date<=?"; q_det += " AND pd.plan_date<=?"; params.append(date_to)
+    plans = [dict(r) for r in conn.execute(q_plans + " ORDER BY plan_date", params).fetchall()]
+    details = [dict(r) for r in conn.execute(q_det, params).fetchall()]
+    conn.close()
+    if not details: return {'plans': plans, 'details': [], 'summary': {}}
+    df = pd.DataFrame(details)
+    df['status'] = df['status'].fillna('Planned')
+    sc = df['status'].value_counts().to_dict()
+    total = len(df)
+    return {
+        'plans': plans,
+        'summary': {
+            'total_dos': total, 'total_qty': int(df['do_qty'].sum()),
+            'status_counts': sc,
+            'completion_pct': round((sc.get('Done',0)+sc.get('Delayed',0))/max(total,1)*100,1),
+            'pickers_used': int(df['machine_no'].nunique()),
+            'dates': sorted(df['plan_date'].unique().tolist()),
+        },
+        'by_date': df.groupby('plan_date').apply(lambda g: {
+            'dos': len(g), 'qty': int(g['do_qty'].sum()),
+            'done': int((g['status']=='Done').sum()),
+            'pct': round((g['status'].isin(['Done','Delayed'])).sum()/max(len(g),1)*100,1)
+        }).to_dict(),
+        'floor_data': df.groupby('floor').apply(lambda g: {
+            'total': len(g), 'done': int((g['status']=='Done').sum()),
+            'qty': int(g['do_qty'].sum())
+        }).to_dict(),
+    }
+
+# ─── Email helper ──────────────────────────────────────────────────────────────
+def send_email(cfg_dict, to_addr, subject, html_body):
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From']    = cfg_dict.get('from_addr','')
+    msg['To']      = to_addr
+    msg.attach(MIMEText(html_body, 'html'))
+    s = smtplib.SMTP(cfg_dict['smtp_host'], int(cfg_dict.get('smtp_port',587)))
+    s.starttls()
+    if cfg_dict.get('smtp_user'):
+        s.login(cfg_dict['smtp_user'], cfg_dict['smtp_pass'])
+    s.sendmail(cfg_dict['from_addr'], to_addr, msg.as_string())
+    s.quit()
+
+# ─── Improved templates with Excel dropdowns ──────────────────────────────────
+def make_actuals_template_v2(token, status_filter=None):
+    """Actuals template — only required columns + date validation dropdown."""
+    details = load_plan_details(token)
+    if not details: return None
+    if status_filter and status_filter != 'All':
+        details = [d for d in details if (d.get('status') or 'Planned') == status_filter]
+    wb = Workbook(); ws = wb.active; ws.title = 'ACTUALS'
+    from openpyxl.worksheet.datavalidation import DataValidation
+    def hf(): return Font(name='Arial', size=9, bold=True, color='FFFFFFFF')
+    def fl(h): return PatternFill('solid', start_color='FF'+h.lstrip('#'), end_color='FF'+h.lstrip('#'))
+    headers = ['DO_NO','FLOOR','SEC','PRIORITY','DO_QTY','PICKER_NO','MACHINE_NO',
+               'PLAN_START','PLAN_END','ACTUAL_DATE','ACTUAL_START','ACTUAL_END','NOTES']
+    widths  = [16,7,8,9,10,10,16,12,12,14,13,13,20]
+    for ci,(h,w) in enumerate(zip(headers,widths),1):
+        c = ws.cell(row=1, column=ci, value=h); c.font = hf(); c.fill = fl('1E3A5F')
+        c.alignment = Alignment(horizontal='center')
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    today_str = date.today().isoformat()
+    edit_fill = PatternFill('solid', start_color='FF0A2040', end_color='FF0A2040')
+    for i, rec in enumerate(sorted(details, key=lambda r:(r.get('floor',0),r.get('picker_no',0),r.get('start_time','')))):
+        r = i + 2
+        vals = [str(rec.get('do_no','')), rec.get('floor',0), rec.get('sec',''),
+                rec.get('priority',1), rec.get('do_qty',0), rec.get('picker_no',0),
+                rec.get('machine_no',''), rec.get('start_time',''), rec.get('end_time',''),
+                today_str, '', '', '']
+        for ci, v in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=ci, value=v)
+            if ci >= 10:  # editable cols
+                cell.fill = edit_fill
+    # Add row 2 hint
+    ws.cell(row=2, column=10).comment = None
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0); return buf.getvalue()
+
+def make_status_template_v2(token, status_filter=None):
+    """Status template with Excel dropdown validation for NEW_STATUS and CANCEL_REASON."""
+    details = load_plan_details(token)
+    if not details: return None
+    if status_filter and status_filter != 'All':
+        details = [d for d in details if (d.get('status') or 'Planned') == status_filter]
+    wb = Workbook(); ws = wb.active; ws.title = 'STATUS_UPDATE'
+    from openpyxl.worksheet.datavalidation import DataValidation
+    def hf(): return Font(name='Arial', size=9, bold=True, color='FFFFFFFF')
+    def fl(h): return PatternFill('solid', start_color='FF'+h.lstrip('#'), end_color='FF'+h.lstrip('#'))
+    headers = ['DO_NO','FLOOR','SEC','PRIORITY','DO_QTY','PICKER_NO','MACHINE_NO',
+               'PLAN_START','PLAN_END','CURRENT_STATUS','NEW_STATUS','CANCEL_REASON']
+    widths  = [16,7,8,9,10,10,16,12,12,14,14,25]
+    for ci,(h,w) in enumerate(zip(headers,widths),1):
+        c = ws.cell(row=1, column=ci, value=h); c.font = hf(); c.fill = fl('1E3A5F')
+        c.alignment = Alignment(horizontal='center')
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    # Excel dropdown validations
+    dv_status = DataValidation(type='list', formula1='"Done,Cancelled,Delayed,Not Picked,Planned"', allow_blank=True)
+    dv_reason = DataValidation(type='list', formula1='"Picker absent,Stock unavailable,DO cancelled by WH,End of shift,System error,Other"', allow_blank=True)
+    ws.add_data_validation(dv_status); ws.add_data_validation(dv_reason)
+    edit_fill = PatternFill('solid', start_color='FF0A2040', end_color='FF0A2040')
+    for i, rec in enumerate(sorted(details, key=lambda r:(r.get('floor',0),r.get('picker_no',0),r.get('start_time','')))):
+        r = i + 2
+        vals = [str(rec.get('do_no','')), rec.get('floor',0), rec.get('sec',''),
+                rec.get('priority',1), rec.get('do_qty',0), rec.get('picker_no',0),
+                rec.get('machine_no',''), rec.get('start_time',''), rec.get('end_time',''),
+                rec.get('status','Planned'), '', '']
+        for ci, v in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=ci, value=v)
+            if ci >= 11: cell.fill = edit_fill
+        dv_status.add(ws.cell(row=r, column=11))
+        dv_reason.add(ws.cell(row=r, column=12))
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0); return buf.getvalue()
+
+# ─── Updated template endpoints with filter support ───────────────────────────
+@app.get("/api/plans/{token}/actuals-template-v2")
+def api_actuals_template_v2(token: str, status_filter: Optional[str]=None):
+    xlsx = make_actuals_template_v2(token, status_filter)
+    if not xlsx: raise HTTPException(404, "No details for token")
+    return StreamingResponse(io.BytesIO(xlsx),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="Actuals_{token}.xlsx"'})
+
+@app.get("/api/plans/{token}/status-template-v2")
+def api_status_template_v2(token: str, status_filter: Optional[str]=None):
+    xlsx = make_status_template_v2(token, status_filter)
+    if not xlsx: raise HTTPException(404, "No details for token")
+    return StreamingResponse(io.BytesIO(xlsx),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="Status_{token}.xlsx"'})
 
 # ─── Serve React Frontend ─────────────────────────────────────────────────────
 STATIC_DIR = os.path.join(BASE_DIR, "static")

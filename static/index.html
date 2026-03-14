@@ -203,6 +203,13 @@ const{useState,useEffect,useCallback,useRef,useMemo}=React;
 const API=window.location.origin;
 
 async function apiFetch(path,opts={}){
+  // Auto-inject auth token if present
+  try{
+    const auth=JSON.parse(localStorage.getItem('picker_auth')||'null');
+    if(auth?.token&&!opts.headers?.Authorization){
+      opts.headers={...(opts.headers||{}),'Authorization':`Bearer ${auth.token}`};
+    }
+  }catch{}
   const r=await fetch(API+path,opts);
   if(!r.ok){const e=await r.json().catch(()=>({detail:'Error'}));throw new Error(e.detail||`HTTP ${r.status}`);}
   return r.json();
@@ -543,18 +550,21 @@ function SettingsPage({cfg,setCfg,toast}){
     </div>
 
     <div className="sbox">
-      <div className="sbox-t">🏷️ Machine Group Thresholds (Read-only)</div>
-      <div className="hint" style={{marginBottom:11}}>Groups auto-assigned from BGT_PICKER column in MACHINE sheet. Priority tiers cut by thirds.</div>
-      <div className="g3" style={{gap:10}}>
-        {[{g:'G1',c:'var(--green)',desc:'BGT_PICKER ≥ 3,000 pcs',sub:'Assigned P1–P(N/3) — highest priority DOs'},
-          {g:'G2',c:'var(--accent)',desc:'BGT_PICKER ≥ 2,000 pcs',sub:'Assigned P(N/3+1)–P(2N/3) — mid priority DOs'},
-          {g:'G3',c:'var(--gold)',desc:'BGT_PICKER ≥ 1,000 pcs',sub:'Assigned P(2N/3+1)+ — lowest priority DOs'}]
-          .map(({g,c,desc,sub})=><div key={g} className="card2" style={{borderLeft:`3px solid ${c}`}}>
-            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:5}}><GPill g={g}/><span style={{fontSize:'.73rem',fontWeight:600,color:c}}>{g}</span></div>
-            <div style={{fontSize:'.7rem',color:'var(--t2)',marginBottom:2}}>{desc}</div>
-            <div style={{fontSize:'.62rem',color:'var(--muted)'}}>{sub}</div>
+      <div className="sbox-t">🏷️ Machine Group Thresholds — Configurable</div>
+      <div className="hint" style={{marginBottom:11}}>Set BGT_PICKER thresholds for G1/G2/G3 grouping. G1 machines have highest capacity and get lowest picker numbers.</div>
+      <div className="g3" style={{gap:10,marginBottom:10}}>
+        {[{g:'G1',c:'var(--green)',k1:'g1_min',desc:'G1 minimum BGT_PICKER'},
+          {g:'G2',c:'var(--accent)',k1:'g2_min',desc:'G2 minimum BGT_PICKER'},
+          {g:'G3',c:'var(--gold)',k1:'g3_min',desc:'G3 minimum BGT_PICKER'}]
+          .map(({g,c,k1,desc})=><div key={g} className="card2" style={{borderLeft:`3px solid ${c}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:7}}><GPill g={g}/><span style={{fontSize:'.73rem',fontWeight:600,color:c}}>{g} Threshold</span></div>
+            <div className="fg"><label className="lbl">{desc}</label>
+              <input type="number" value={lc[k1]||{g1_min:3000,g2_min:2000,g3_min:1}[k1]||0} min={0} max={99999} step={100}
+                onChange={e=>upd(k1,+e.target.value)} style={{fontFamily:'var(--mono)'}}/>
+            </div>
           </div>)}
       </div>
+      <div className="hint">BGT ≥ G1_min → G1 · BGT ≥ G2_min (and &lt; G1_min) → G2 · else → G3. These labels are display-only and do not restrict allocation.</div>
     </div>
 
     <div className="sbox">
@@ -957,7 +967,7 @@ function HistoryPage({toast}){
 function ActualTimesPage({toast}){
   const[plans,setPlans]=useState([]);const[sel,setSel]=useState('');
   const[detail,setDetail]=useState(null);const[loading,setLoading]=useState(false);
-  const[saving,setSaving]=useState(false);const[times,setTimes]=useState({});
+  const[saving,setSaving]=useState(false);const[times,setTimes]=useState({});const todayStr=new Date().toISOString().slice(0,10);
   const[flF,setFlF]=useState('all');const[pkF,setPkF]=useState('all');
   const[bulkO,setBulkO]=useState(false);const[bulkF,setBulkF]=useState(null);const[bulkS,setBulkS]=useState(false);
   const[bulkSH,setBulkSH]=useState('08');const[bulkEH,setBulkEH]=useState('17');
@@ -967,7 +977,7 @@ function ActualTimesPage({toast}){
     setSel(tok);setDetail(null);setTimes({});if(!tok)return;
     setLoading(true);
     try{const d=await apiFetch(`/api/plans/${tok}`);setDetail(d);
-      const t={};d.details.forEach(r=>{if(r.actual_start)t[r.do_no]={date:r.actual_date||d.meta.plan_date,start:r.actual_start,end:r.actual_end||'',notes:r.actual_notes||''};});
+      const t={};d.details.forEach(r=>{if(r.actual_start)t[r.do_no]={date:r.actual_date||d.meta.plan_date||new Date().toISOString().slice(0,10),start:r.actual_start,end:r.actual_end||'',notes:r.actual_notes||''};});
       setTimes(t);
     }catch(e){toast(e.message,'err');}finally{setLoading(false);}};
   const setT=(dn,f,v)=>setTimes(t=>({...t,[dn]:{...(t[dn]||{}),[f]:v}}));
@@ -1096,9 +1106,15 @@ function ActualTimesPage({toast}){
             {bulkO&&<div className="exp-b">
               <div className="hint" style={{marginBottom:9}}>1. Download template → fill ACTUAL_DATE, ACTUAL_START, ACTUAL_END → 2. Re-upload</div>
               <div style={{display:'flex',gap:7,marginBottom:9}}>
-                <a href={`${API}/api/plans/${sel}/actuals-template`} download>
-                  <button className="btn btn-g btn-sm">⬇️ Download Template</button>
-                </a>
+                <div style={{display:'flex',gap:7,alignItems:'center',marginBottom:4}}>
+                  <select id="actTplFilter" style={{height:31,width:'auto',fontSize:'.72rem'}}>
+                    <option value="All">All DOs</option>
+                    {['Planned','Done','Delayed','Not Picked','Cancelled'].map(s=><option key={s} value={s}>{s} only</option>)}
+                  </select>
+                  <a href="#" onClick={e=>{e.preventDefault();const f=document.getElementById('actTplFilter').value;window.location=`${API}/api/plans/${sel}/actuals-template-v2?status_filter=${encodeURIComponent(f)}`;}}>
+                    <button className="btn btn-g btn-sm">⬇️ Download Actuals Template</button>
+                  </a>
+                </div>
               </div>
               <input type="file" accept=".xlsx,.xls" onChange={e=>setBulkF(e.target.files[0])} style={{marginBottom:8,fontSize:'.73rem'}}/>
               <button className="btn btn-p btn-sm" disabled={!bulkF||bulkS} onClick={bulkUpload}>
@@ -1151,7 +1167,7 @@ function ActualTimesPage({toast}){
               <td>P{d.priority}</td><td className="n">{(d.do_qty||0).toLocaleString()}</td>
               <td style={{color:'var(--accent)',fontFamily:'var(--mono)',fontSize:'.67rem'}}>{d.start_time}</td>
               <td style={{color:'var(--muted)',fontFamily:'var(--mono)',fontSize:'.67rem'}}>{d.end_time}</td>
-              <td style={{background:'rgba(16,185,129,.03)'}}><input type="date" value={t.date||''} onChange={e=>setT(d.do_no,'date',e.target.value)} style={{fontSize:'.67rem',padding:'3px 6px',width:108}}/></td>
+              <td style={{background:'rgba(16,185,129,.03)'}}><input type="date" value={t.date||(d.status==='Planned'?todayStr:'')} onChange={e=>setT(d.do_no,'date',e.target.value)} style={{fontSize:'.67rem',padding:'3px 6px',width:108}}/></td>
               <td style={{background:'rgba(16,185,129,.03)'}}><input type="time" value={t.start||''} onChange={e=>setT(d.do_no,'start',e.target.value)} style={{fontSize:'.67rem',padding:'3px 6px',width:83}}/></td>
               <td style={{background:'rgba(16,185,129,.03)'}}><input type="time" value={t.end||''} onChange={e=>setT(d.do_no,'end',e.target.value)} style={{fontSize:'.67rem',padding:'3px 6px',width:83}}/></td>
               <td style={{background:'rgba(16,185,129,.03)'}}><input type="text" value={t.notes||''} onChange={e=>setT(d.do_no,'notes',e.target.value)} placeholder="—" style={{fontSize:'.67rem',padding:'3px 6px',width:90}}/></td>
@@ -1457,7 +1473,15 @@ function CancelStatusPage({toast}){
           </div>
           {bulkO&&<div className="exp-b">
             <div className="hint" style={{marginBottom:9}}>Download template → fill NEW_STATUS + CANCEL_REASON → re-upload</div>
-            {sel&&<a href={`${API}/api/plans/${sel}/status-template`} download><button className="btn btn-g btn-sm" style={{marginBottom:9}}>⬇️ Download Status Template</button></a>}
+            {sel&&<div style={{display:'flex',gap:7,alignItems:'center',marginBottom:9}}>
+              <select id="statTplFilter" style={{height:31,width:'auto',fontSize:'.72rem'}}>
+                <option value="All">All DOs</option>
+                {['Planned','Done','Delayed','Not Picked','Cancelled'].map(s=><option key={s} value={s}>{s} only</option>)}
+              </select>
+              <a href="#" onClick={e=>{e.preventDefault();const f=document.getElementById('statTplFilter').value;window.location=`${API}/api/plans/${sel}/status-template-v2?status_filter=${encodeURIComponent(f)}`;}}>
+                <button className="btn btn-g btn-sm">⬇️ Download Status Template</button>
+              </a>
+            </div>}
             <input type="file" accept=".xlsx,.xls" onChange={e=>setBulkF(e.target.files[0])} style={{marginBottom:8,fontSize:'.73rem'}}/>
             <button className="btn btn-p btn-sm" disabled={!bulkF||!sel||bulkS} onClick={bulkUpload}>
               {bulkS?<><Spin sm/>&nbsp;Uploading...</>:'💾 Upload & Apply'}
@@ -1531,24 +1555,39 @@ function CancelStatusPage({toast}){
 }
 
 // ── ROOT APP ──────────────────────────────────────────────────────────────────
-const DEF_CFG={start_min:480,wh_end:1020,lunch_s:780,lunch_e:825,eff_min:495,bgt:3000,fill_pct:70};
+const DEF_CFG={start_min:480,wh_end:1020,lunch_s:780,lunch_e:825,eff_min:495,bgt:3000,fill_pct:70,g1_min:3000,g2_min:2000,g3_min:1};
 const NAV=[
-  {id:'plan',  ico:'🏭',lbl:'New Plan',     grp:'Planning'},
-  {id:'history',ico:'📚',lbl:'History',      grp:'Planning'},
-  {id:'actual', ico:'⏱',lbl:'Actual Times',  grp:'Operations'},
-  {id:'analytics',ico:'📊',lbl:'Analytics',  grp:'Operations'},
-  {id:'cancel', ico:'🚫',lbl:'Cancel / Status',grp:'Operations'},
-  {id:'settings',ico:'⚙️',lbl:'Settings',    grp:'System'},
+  {id:'dashboard',ico:'📈',lbl:'Dashboard',     grp:'Overview'},
+  {id:'plan',     ico:'🏭',lbl:'New Plan',       grp:'Planning'},
+  {id:'history',  ico:'📚',lbl:'History',        grp:'Planning'},
+  {id:'actual',   ico:'⏱',lbl:'Actual Times',   grp:'Operations'},
+  {id:'analytics',ico:'📊',lbl:'Analytics',     grp:'Operations'},
+  {id:'cancel',   ico:'🚫',lbl:'Cancel / Status',grp:'Operations'},
+  {id:'settings', ico:'⚙️',lbl:'Settings',      grp:'System'},
+  {id:'users',    ico:'👥',lbl:'Users',          grp:'System'},
+  {id:'email',    ico:'✉️',lbl:'Email Reports',  grp:'System'},
+  {id:'help',     ico:'❓',lbl:'Help & SOP',     grp:'System'},
 ];
-const PSUB={plan:'Upload DO+Machine Excel → run allocation',history:'Saved plans, download Excel, cancel plan',
+const PSUB={dashboard:'Live KPIs, trends, scanner performance, completion stats',
+  plan:'Upload DO+Machine Excel → run allocation',history:'Saved plans, download Excel, cancel plan',
   actual:'Record actual pick times vs planned schedule',analytics:'Completion %, floor & picker performance',
-  cancel:'Update DO status · unlock cancelled DOs',settings:'Shift timing, capacity rules, algorithm reference'};
+  cancel:'Update DO status · unlock cancelled DOs',settings:'Shift timing, capacity rules, algorithm reference',
+  users:'User management — roles: admin, operator, viewer',
+  email:'Email report configuration and schedules',
+  help:'System logic, SOP, and user guide'};
 
 function App(){
   const[page,setPage]=useState('plan');
   const{toasts,toast}=useToast();
   const[cfg,setCfg]=useState(()=>{try{const s=localStorage.getItem('picker_cfg');return s?JSON.parse(s):DEF_CFG;}catch{return DEF_CFG;}});
   const[planCnt,setPlanCnt]=useState(null);
+  const[auth,setAuth]=useState(()=>{try{const s=localStorage.getItem('picker_auth');return s?JSON.parse(s):null;}catch{return null;}});
+  const[showLogin,setShowLogin]=useState(false);
+  const saveAuth=(a)=>{setAuth(a);try{if(a)localStorage.setItem('picker_auth',JSON.stringify(a));else localStorage.removeItem('picker_auth');}catch{}};
+  const logout=()=>{saveAuth(null);toast('Logged out','info');};
+  const PROTECTED=['plan','cancel','users','email']; // pages requiring operator+
+  const isOp=auth&&['operator','admin'].includes(auth.role);
+  const isAdmin=auth&&auth.role==='admin';
   useEffect(()=>{apiFetch('/api/plans').then(p=>setPlanCnt(p.length)).catch(()=>{});},[page]);
   const m2t=m=>`${String(m/60|0).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
   const grps=[...new Set(NAV.map(n=>n.grp))];
@@ -1602,21 +1641,498 @@ function App(){
           <span className="tb-tag">PKP System</span>
           <span className="tb-tag" style={{color:'var(--cyan)'}}>BGT {cfg.bgt.toLocaleString()}</span>
           <span className="tb-tag" style={{color:'var(--gold)'}}>Fill {cfg.fill_pct}%</span>
-          <span className="tb-tag" style={{color:'var(--green)'}}>{m2t(cfg.start_min)}–{m2t(cfg.wh_end)} · {cfg.eff_min}m</span>
+          <span className="tb-tag" style={{color:'var(--green)'}}>{m2t(cfg.start_min)}–{m2t(cfg.wh_end)}</span>
+          {auth?<>
+            <span className="tb-tag" style={{color:auth.role==='admin'?'var(--red)':auth.role==='operator'?'var(--accent)':'var(--muted)'}}>
+              👤 {auth.username} <span style={{fontSize:'.5rem',opacity:.7}}>({auth.role})</span>
+            </span>
+            <button className="btn btn-g btn-xs" onClick={logout}>Logout</button>
+          </>:
+          <button className="btn btn-p btn-xs" onClick={()=>setShowLogin(true)}>🔐 Login</button>}
         </div>
       </div>
       <div className="content">
-        {page==='plan'     &&<NewPlanPage cfg={cfg} toast={toast}/>}
-        {page==='history'  &&<HistoryPage toast={toast}/>}
-        {page==='actual'   &&<ActualTimesPage toast={toast}/>}
-        {page==='analytics'&&<AnalyticsPage toast={toast} cfg={cfg}/>}
-        {page==='cancel'   &&<CancelStatusPage toast={toast}/>}
-        {page==='settings' &&<SettingsPage cfg={cfg} setCfg={setCfg} toast={toast}/>}
+        {page==='dashboard' &&<DashboardPage toast={toast} cfg={cfg}/>}
+        {page==='plan'      &&(isOp?<NewPlanPage cfg={cfg} toast={toast}/>:<AuthGate role="operator" onLogin={()=>setShowLogin(true)}/>)}
+        {page==='history'   &&<HistoryPage toast={toast}/>}
+        {page==='actual'    &&<ActualTimesPage toast={toast}/>}
+        {page==='analytics' &&<AnalyticsPage toast={toast} cfg={cfg}/>}
+        {page==='cancel'    &&(isOp?<CancelStatusPage toast={toast}/>:<AuthGate role="operator" onLogin={()=>setShowLogin(true)}/>)}
+        {page==='settings'  &&<SettingsPage cfg={cfg} setCfg={setCfg} toast={toast}/>}
+        {page==='users'     &&(isAdmin?<UsersPage toast={toast}/>:<AuthGate role="admin" onLogin={()=>setShowLogin(true)}/>)}
+        {page==='email'     &&(isAdmin?<EmailPage toast={toast}/>:<AuthGate role="admin" onLogin={()=>setShowLogin(true)}/>)}
+        {page==='help'      &&<HelpPage/>}
+        {showLogin&&<LoginModal onSuccess={a=>{saveAuth(a);setShowLogin(false);toast(`Welcome ${a.username}!`,'ok');}} onClose={()=>setShowLogin(false)} toast={toast}/>}
       </div>
     </div>
     <Toasts toasts={toasts}/>
   </div>;
 }
+
+// ── AUTH COMPONENTS ──────────────────────────────────────────────────────────
+function AuthGate({role,onLogin}){
+  return<div className="card" style={{maxWidth:400,margin:'60px auto',textAlign:'center',padding:32}}>
+    <div style={{fontSize:'2rem',marginBottom:12}}>🔐</div>
+    <div style={{fontFamily:'var(--mono)',fontSize:'.9rem',fontWeight:700,marginBottom:8}}>Login Required</div>
+    <div style={{fontSize:'.75rem',color:'var(--muted)',marginBottom:20}}>This page requires <b style={{color:'var(--accent)'}}>{role}</b> access.</div>
+    <button className="btn btn-p btn-fw" onClick={onLogin}>Login</button>
+  </div>;
+}
+function LoginModal({onSuccess,onClose,toast}){
+  const[u,setU]=useState('');const[p,setP]=useState('');const[loading,setLoading]=useState(false);
+  const submit=async()=>{
+    if(!u||!p){toast('Enter username and password','warn');return;}
+    setLoading(true);
+    try{
+      const d=await apiFetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+      onSuccess(d);
+    }catch(e){toast(e.message,'err');}finally{setLoading(false);}
+  };
+  return<div className="mb"><div className="mo" style={{width:360}}>
+    <div className="mo-t">🔐 Login to PickerOS</div>
+    <div style={{marginBottom:8}} className="fg"><label className="lbl">Username</label>
+      <input type="text" value={u} onChange={e=>setU(e.target.value)} autoFocus onKeyDown={e=>e.key==='Enter'&&submit()}/>
+    </div>
+    <div style={{marginBottom:16}} className="fg"><label className="lbl">Password</label>
+      <input type="password" value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}/>
+    </div>
+    <div style={{fontSize:'.65rem',color:'var(--muted)',marginBottom:14}}>Default: admin / admin123</div>
+    <div className="mo-f">
+      <button className="btn btn-g btn-sm" onClick={onClose}>Cancel</button>
+      <button className="btn btn-p btn-sm" disabled={loading} onClick={submit}>{loading?<><Spin sm/>&nbsp;Logging in...</>:'Login'}</button>
+    </div>
+  </div></div>;
+}
+
+// ── DASHBOARD PAGE ────────────────────────────────────────────────────────────
+function DashboardPage({toast,cfg}){
+  const[data,setData]=useState(null);const[loading,setLoading]=useState(true);
+  const load=()=>{setLoading(true);apiFetch('/api/dashboard').then(d=>{setData(d);setLoading(false);}).catch(e=>{toast(e.message,'err');setLoading(false);});};
+  useEffect(()=>{load();const t=setInterval(load,60000);return()=>clearInterval(t);},[]);
+  if(loading&&!data)return<div className="ctr" style={{padding:60}}><Spin/></div>;
+  if(!data)return<div className="al al-e">Failed to load dashboard</div>;
+  const {today,yesterday,mtd,wtd,total,last_7_days,scanner_perf,floor_summary,recent_plans}=data;
+  const todayPct=Math.round((today.done+today.delayed)/Math.max(today.dos_total,1)*100);
+  const mtdPct=Math.round(mtd.dos_done/Math.max(mtd.dos_total,1)*100);
+  return<div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+      <div><div style={{fontSize:'.6rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.1em'}}>Live Dashboard · Auto-refreshes every 60s</div></div>
+      <button className="btn btn-g btn-sm" onClick={load}>↻ Refresh</button>
+    </div>
+
+    {/* Today KPIs */}
+    <div className="sec">Today — {new Date().toISOString().slice(0,10)}</div>
+    <div className="g6" style={{gap:8,marginBottom:13}}>
+      {[{l:'Plans Run',v:today.plans,c:'bl'},{l:'Total DOs',v:today.dos_total,c:'pu'},
+        {l:'Done',v:today.done,c:'gr',s:`${todayPct}% complete`},
+        {l:'Pending',v:today.pending,c:'go',s:'Planned, not executed'},
+        {l:'Delayed',v:today.delayed,c:'cy'},{l:'Cancelled',v:today.cancelled,c:'re'}]
+        .map(k=><div key={k.l} className={`kpi ${k.c}`}>
+          <div className="kl">{k.l}</div><div className="kv">{k.v}</div>
+          {k.s&&<div className="ks">{k.s}</div>}
+        </div>)}
+    </div>
+
+    {/* Today completion bar */}
+    <div className="card" style={{marginBottom:13,padding:'12px 16px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',marginBottom:7}}>
+        <span style={{fontSize:'.7rem',fontWeight:600}}>Today's Completion</span>
+        <span style={{fontFamily:'var(--mono)',fontWeight:700,color:todayPct>=80?'var(--green)':todayPct>=50?'var(--gold)':'var(--red)',fontSize:'.95rem'}}>{todayPct}%</span>
+      </div>
+      <div className="pb th" style={{marginBottom:6}}>
+        <div className="pbf" style={{width:`${todayPct}%`,background:todayPct>=80?'var(--green)':todayPct>=50?'var(--gold)':'var(--red)'}}/>
+      </div>
+      <div style={{display:'flex',gap:12,fontSize:'.62rem',color:'var(--muted)'}}>
+        <span>QTY Done: <b style={{color:'var(--green)',fontFamily:'var(--mono)'}}>{(today.qty_done||0).toLocaleString()}</b></span>
+        <span>QTY Total: <b style={{fontFamily:'var(--mono)'}}>{(today.qty_total||0).toLocaleString()}</b></span>
+        <span>Yesterday Done: <b style={{fontFamily:'var(--mono)'}}>{yesterday.done}</b> / {yesterday.total}</span>
+        {yesterday.pending>0&&<span style={{color:'var(--gold)'}}>Yesterday Pending: <b>{yesterday.pending}</b></span>}
+      </div>
+    </div>
+
+    <div className="g2" style={{gap:13,marginBottom:13}}>
+      {/* MTD + WTD */}
+      <div>
+        <div className="sec">Month-to-Date</div>
+        <div className="g2" style={{gap:8,marginBottom:8}}>
+          {[{l:'Plans',v:mtd.plans,c:'bl'},{l:'DOs Done',v:mtd.dos_done,c:'gr'},
+            {l:'Completion',v:`${mtdPct}%`,c:mtdPct>=80?'gr':'go'},{l:'QTY Done',v:(mtd.qty_done||0).toLocaleString(),c:'cy'}]
+            .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}>
+              <div className="kl">{k.l}</div><div className="kv" style={{fontSize:'.95rem'}}>{k.v}</div>
+            </div>)}
+        </div>
+        <div className="sec">Week-to-Date</div>
+        <div className="g2" style={{gap:8,marginBottom:8}}>
+          {[{l:'DOs Done',v:wtd.dos_done,c:'gr'},{l:'Completion',v:`${Math.round(wtd.dos_done/Math.max(wtd.dos_total,1)*100)}%`,c:'bl'}]
+            .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}>
+              <div className="kl">{k.l}</div><div className="kv" style={{fontSize:'.95rem'}}>{k.v}</div>
+            </div>)}
+        </div>
+        <div className="sec">All-Time</div>
+        <div className="g4" style={{gap:8}}>
+          {[{l:'Total Plans',v:total.plans,c:'bl'},{l:'Total DOs',v:total.dos,c:'pu'},
+            {l:'Done',v:total.done,c:'gr'},{l:'Machines',v:total.machines,c:'cy'}]
+            .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}>
+              <div className="kl">{k.l}</div><div className="kv" style={{fontSize:'.9rem'}}>{k.v}</div>
+            </div>)}
+        </div>
+      </div>
+
+      {/* 7-day trend */}
+      <div>
+        <div className="sec">7-Day Trend</div>
+        <div className="card" style={{padding:'12px 14px'}}>
+          {last_7_days.map((d,i)=>{
+            const mx=Math.max(...last_7_days.map(x=>x.total),1);
+            const barW=Math.round(d.total/mx*100);
+            const doneW=Math.round(d.done/mx*100);
+            const dt=new Date(d.date+'T00:00:00');
+            const lbl=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()]+' '+d.date.slice(5);
+            return<div key={d.date} className="bc-row">
+              <div className="bc-lbl" style={{width:80,fontSize:'.6rem'}}>{lbl}</div>
+              <div className="bc-bar" style={{position:'relative'}}>
+                <div style={{position:'absolute',left:0,top:0,height:'100%',width:`${barW}%`,background:'rgba(59,130,246,.2)',borderRadius:3}}/>
+                <div style={{position:'absolute',left:0,top:0,height:'100%',width:`${doneW}%`,background:'var(--green)',borderRadius:3,opacity:.8}}/>
+                <span className="bc-val">{d.done}/{d.total} ({d.pct}%)</span>
+              </div>
+            </div>;
+          })}
+        </div>
+      </div>
+    </div>
+
+    {/* Floor summary today */}
+    {floor_summary.length>0&&<>
+      <div className="sec">Today — Floor Breakdown</div>
+      <div className="card" style={{padding:'12px 14px',marginBottom:13}}>
+        <div style={{display:'grid',gridTemplateColumns:'50px 1fr 70px 70px 70px 70px 80px',gap:6,marginBottom:6,
+          fontSize:'.53rem',color:'var(--muted)',textTransform:'uppercase',fontWeight:700}}>
+          <span>Floor</span><span>Completion</span><span className="n" style={{textAlign:'right'}}>Total</span>
+          <span className="n" style={{textAlign:'right'}}>Done</span><span className="n" style={{textAlign:'right'}}>Pending</span>
+          <span className="n" style={{textAlign:'right'}}>Cancel</span><span className="n" style={{textAlign:'right'}}>QTY</span>
+        </div>
+        {floor_summary.map(f=>{
+          const pct=Math.round(f.done/Math.max(f.total-f.cancelled,1)*100);
+          const col=pct>=80?'var(--green)':pct>=50?'var(--gold)':'var(--red)';
+          return<div key={f.floor} style={{display:'grid',gridTemplateColumns:'50px 1fr 70px 70px 70px 70px 80px',gap:6,alignItems:'center',padding:'4px 0',borderBottom:'1px solid rgba(26,37,53,.6)'}}>
+            <FL f={f.floor}/>
+            <div><div className="pb sl" style={{marginBottom:1}}>
+              <div className="pbf" style={{width:`${pct}%`,background:col}}/>
+            </div><span style={{fontSize:'.55rem',color:col,fontFamily:'var(--mono)'}}>{pct}%</span></div>
+            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem'}}>{f.total}</span>
+            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--green)'}}>{f.done}</span>
+            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--gold)'}}>{f.pending}</span>
+            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--red)'}}>{f.cancelled}</span>
+            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--muted)'}}>{(f.qty||0).toLocaleString()}</span>
+          </div>;
+        })}
+      </div>
+    </>}
+
+    <div className="g2" style={{gap:13}}>
+      {/* Scanner MTD performance */}
+      {scanner_perf.length>0&&<div>
+        <div className="sec">Scanner / Machine Performance — MTD</div>
+        <div className="tw tl">
+          <table className="dt"><thead><tr>
+            <th>Machine</th><th>Scanner</th><th>DOs</th><th>QTY</th><th>Done</th><th>Avg Util%</th>
+          </tr></thead><tbody>
+            {scanner_perf.map((s,i)=><tr key={i}>
+              <td style={{fontFamily:'var(--mono)',fontWeight:600,fontSize:'.67rem'}}>{s.machine_no}</td>
+              <td style={{fontSize:'.63rem',color:'var(--muted)'}}>{s.scanner_name||'—'}</td>
+              <td className="n">{s.dos}</td>
+              <td className="n">{(s.qty||0).toLocaleString()}</td>
+              <td className="n" style={{color:'var(--green)'}}>{s.done}</td>
+              <td>
+                <div style={{display:'flex',alignItems:'center',gap:4}}>
+                  <div className="pb sl" style={{width:45}}>
+                    <div className="pbf" style={{width:`${s.avg_util||0}%`,background:(s.avg_util||0)>=70?'var(--green)':'var(--gold)'}}/>
+                  </div>
+                  <span style={{fontSize:'.6rem',fontFamily:'var(--mono)',color:(s.avg_util||0)>=70?'var(--green)':'var(--gold)'}}>{s.avg_util}%</span>
+                </div>
+              </td>
+            </tr>)}
+          </tbody></table>
+        </div>
+      </div>}
+
+      {/* Recent plans */}
+      <div>
+        <div className="sec">Recent Plans</div>
+        <div className="tw tl">
+          <table className="dt"><thead><tr>
+            <th>Token</th><th>Date</th><th>Run</th><th>DOs</th><th>Done</th><th>Util%</th>
+          </tr></thead><tbody>
+            {recent_plans.map((p,i)=>{
+              const pct=Math.round((p.done_count||0)/Math.max(p.total_dos,1)*100);
+              return<tr key={i}>
+                <td style={{fontFamily:'var(--mono)',fontSize:'.65rem',color:'var(--accent)',fontWeight:700}}>{p.token}</td>
+                <td style={{fontSize:'.65rem'}}>{p.plan_date}</td>
+                <td className="n">R{p.run_number}</td>
+                <td className="n">{p.total_dos}</td>
+                <td className="n" style={{color:'var(--green)'}}>{p.done_count||0}
+                  <span style={{fontSize:'.55rem',color:'var(--muted)',marginLeft:3}}>{pct}%</span>
+                </td>
+                <td><div className="pb sl" style={{width:50}}>
+                  <div className="pbf" style={{width:`${p.avg_util||0}%`,background:(p.avg_util||0)>=70?'var(--green)':'var(--gold)'}}/>
+                </div></td>
+              </tr>;
+            })}
+          </tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── USERS PAGE ────────────────────────────────────────────────────────────────
+function UsersPage({toast}){
+  const[users,setUsers]=useState([]);const[form,setForm]=useState({username:'',password:'admin123',role:'operator',email:''});
+  const[editing,setEditing]=useState(null);
+  const load=()=>apiFetch('/api/users').then(setUsers).catch(e=>toast(e.message,'err'));
+  useEffect(()=>{load();},[]);
+  const token=()=>JSON.parse(localStorage.getItem('picker_auth')||'{}').token||'';
+  const authHdr=()=>({'Content-Type':'application/json','Authorization':`Bearer ${token()}`});
+  const save=async()=>{
+    try{
+      if(editing){await apiFetch(`/api/users/${editing.id}`,{method:'PUT',headers:authHdr(),body:JSON.stringify(form)});}
+      else{await apiFetch('/api/users',{method:'POST',headers:authHdr(),body:JSON.stringify(form)});}
+      toast(editing?'User updated':'User created','ok');setEditing(null);setForm({username:'',password:'admin123',role:'operator',email:''});load();
+    }catch(e){toast(e.message,'err');}
+  };
+  const deactivate=async(id)=>{
+    try{await apiFetch(`/api/users/${id}`,{method:'PUT',headers:authHdr(),body:JSON.stringify({active:0})});toast('User deactivated','ok');load();}
+    catch(e){toast(e.message,'err');}
+  };
+  const ROLES=[{v:'admin',l:'Admin — full access',c:'var(--red)'},{v:'operator',l:'Operator — plan + edit',c:'var(--accent)'},{v:'viewer',l:'Viewer — read only',c:'var(--muted)'}];
+  return<div>
+    <div className="g23" style={{gap:16}}>
+      <div>
+        <div className="sec">{editing?`Edit User: ${editing.username}`:'Add New User'}</div>
+        <div className="sbox">
+          {!editing&&<div className="fg" style={{marginBottom:9}}><label className="lbl">Username</label>
+            <input value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))} placeholder="e.g. john.doe"/></div>}
+          <div className="fg" style={{marginBottom:9}}><label className="lbl">Password {editing&&'(leave blank to keep current)'}</label>
+            <input type="password" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))} placeholder={editing?"Unchanged":"New password"}/></div>
+          <div className="fg" style={{marginBottom:9}}><label className="lbl">Role</label>
+            <select value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))}>
+              {ROLES.map(r=><option key={r.v} value={r.v}>{r.l}</option>)}
+            </select></div>
+          <div className="fg" style={{marginBottom:12}}><label className="lbl">Email (optional)</label>
+            <input type="email" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="user@company.com"/></div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-p btn-sm" onClick={save}>{editing?'💾 Update':'➕ Create'}</button>
+            {editing&&<button className="btn btn-g btn-sm" onClick={()=>{setEditing(null);setForm({username:'',password:'admin123',role:'operator',email:''});}}>Cancel</button>}
+          </div>
+        </div>
+        <div className="al al-i" style={{fontSize:'.7rem',marginTop:10}}>
+          <b>Roles:</b> Admin = all access including user management.
+          Operator = generate plans, edit actuals, cancel DOs.
+          Viewer = read-only access to all pages (no login needed for viewing).
+        </div>
+      </div>
+      <div>
+        <div className="sec">All Users</div>
+        <div className="tw md">
+          <table className="dt"><thead><tr><th>Username</th><th>Role</th><th>Email</th><th>Status</th><th></th></tr></thead>
+          <tbody>{users.map(u=><tr key={u.id} style={!u.active?{opacity:.5}:{}}>
+            <td style={{fontFamily:'var(--mono)',fontWeight:700}}>{u.username}</td>
+            <td><span style={{fontSize:'.65rem',fontWeight:700,color:u.role==='admin'?'var(--red)':u.role==='operator'?'var(--accent)':'var(--muted)'}}>{u.role}</span></td>
+            <td style={{fontSize:'.63rem',color:'var(--muted)'}}>{u.email||'—'}</td>
+            <td><span className={`pill ${u.active?'pD':'pC'}`}>{u.active?'Active':'Inactive'}</span></td>
+            <td style={{display:'flex',gap:5}}>
+              <button className="btn btn-g btn-xs" onClick={()=>{setEditing(u);setForm({username:u.username,password:'',role:u.role,email:u.email||''});}}>Edit</button>
+              {u.active&&<button className="btn btn-d btn-xs" onClick={()=>deactivate(u.id)}>Deactivate</button>}
+            </td>
+          </tr>)}</tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── EMAIL PAGE ────────────────────────────────────────────────────────────────
+function EmailPage({toast}){
+  const[cfg,setCfgE]=useState({smtp_host:'',smtp_port:587,smtp_user:'',smtp_pass:'',from_addr:'',enabled:0});
+  const[scheds,setScheds]=useState([]);const[newSch,setNewSch]=useState({report_type:'daily_summary',frequency:'daily',recipients:'',enabled:1});
+  const[testing,setTesting]=useState(false);const[testTo,setTestTo]=useState('');
+  const token=()=>JSON.parse(localStorage.getItem('picker_auth')||'{}').token||'';
+  const authHdr=()=>({'Content-Type':'application/json','Authorization':`Bearer ${token()}`});
+  useEffect(()=>{
+    apiFetch('/api/email/config').then(c=>{if(c&&Object.keys(c).length)setCfgE(prev=>({...prev,...c}));}).catch(()=>{});
+    apiFetch('/api/email/schedules').then(setScheds).catch(()=>{});
+  },[]);
+  const saveConfig=async()=>{
+    try{await apiFetch('/api/email/config',{method:'POST',headers:authHdr(),body:JSON.stringify(cfg)});toast('Email config saved','ok');}
+    catch(e){toast(e.message,'err');}
+  };
+  const testEmail=async()=>{
+    setTesting(true);
+    try{await apiFetch('/api/email/test',{method:'POST',headers:authHdr(),body:JSON.stringify({to:testTo||cfg.smtp_user})});toast('Test email sent!','ok');}
+    catch(e){toast(e.message,'err');}finally{setTesting(false);}
+  };
+  const saveSch=async()=>{
+    try{await apiFetch('/api/email/schedules',{method:'POST',headers:authHdr(),body:JSON.stringify(newSch)});
+      toast('Schedule saved','ok');apiFetch('/api/email/schedules').then(setScheds);}
+    catch(e){toast(e.message,'err');}
+  };
+  const delSch=async(id)=>{
+    try{await apiFetch(`/api/email/schedules/${id}`,{method:'DELETE',headers:authHdr()});
+      toast('Deleted','ok');setScheds(s=>s.filter(x=>x.id!==id));}
+    catch(e){toast(e.message,'err');}
+  };
+  const REPORT_TYPES=['daily_summary','hourly_status','weekly_performance','completion_alert','overdue_alert'];
+  const FREQS=['hourly','daily','weekly','on_completion','on_overdue'];
+  return<div>
+    <div className="g2" style={{gap:16}}>
+      <div>
+        <div className="sec">SMTP Configuration</div>
+        <div className="sbox">
+          <div className="g2" style={{gap:8,marginBottom:8}}>
+            <div className="fg"><label className="lbl">SMTP Host</label><input value={cfg.smtp_host||''} onChange={e=>setCfgE(c=>({...c,smtp_host:e.target.value}))} placeholder="smtp.gmail.com"/></div>
+            <div className="fg"><label className="lbl">SMTP Port</label><input type="number" value={cfg.smtp_port||587} onChange={e=>setCfgE(c=>({...c,smtp_port:+e.target.value}))}/></div>
+          </div>
+          <div className="g2" style={{gap:8,marginBottom:8}}>
+            <div className="fg"><label className="lbl">Username</label><input value={cfg.smtp_user||''} onChange={e=>setCfgE(c=>({...c,smtp_user:e.target.value}))} placeholder="your@email.com"/></div>
+            <div className="fg"><label className="lbl">Password</label><input type="password" value={cfg.smtp_pass||''} onChange={e=>setCfgE(c=>({...c,smtp_pass:e.target.value}))} placeholder="App password"/></div>
+          </div>
+          <div className="fg" style={{marginBottom:8}}><label className="lbl">From Address</label><input value={cfg.from_addr||''} onChange={e=>setCfgE(c=>({...c,from_addr:e.target.value}))} placeholder="PickerOS <noreply@company.com>"/></div>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+            <input type="checkbox" checked={!!cfg.enabled} onChange={e=>setCfgE(c=>({...c,enabled:e.target.checked?1:0}))}/><label style={{fontSize:'.73rem'}}>Enable email sending</label>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-p btn-sm" onClick={saveConfig}>💾 Save Config</button>
+            <input placeholder="Test recipient email" value={testTo} onChange={e=>setTestTo(e.target.value)} style={{width:200,height:32,fontSize:'.72rem'}}/>
+            <button className="btn btn-g btn-sm" disabled={testing} onClick={testEmail}>{testing?<><Spin sm/>&nbsp;</>:'📧 Send Test'}</button>
+          </div>
+        </div>
+        <div className="al al-i" style={{fontSize:'.7rem',marginTop:8}}>
+          For Gmail: use App Passwords (not your regular password). Enable 2FA first, then generate an app password at myaccount.google.com.
+        </div>
+      </div>
+      <div>
+        <div className="sec">Report Schedules</div>
+        <div className="sbox">
+          <div className="fg" style={{marginBottom:8}}><label className="lbl">Report Type</label>
+            <select value={newSch.report_type} onChange={e=>setNewSch(s=>({...s,report_type:e.target.value}))}>
+              {REPORT_TYPES.map(t=><option key={t}>{t}</option>)}
+            </select></div>
+          <div className="g2" style={{gap:8,marginBottom:8}}>
+            <div className="fg"><label className="lbl">Frequency</label>
+              <select value={newSch.frequency} onChange={e=>setNewSch(s=>({...s,frequency:e.target.value}))}>
+                {FREQS.map(f=><option key={f}>{f}</option>)}
+              </select></div>
+            <div className="fg"><label className="lbl">Recipients (comma-separated)</label>
+              <input value={newSch.recipients} onChange={e=>setNewSch(s=>({...s,recipients:e.target.value}))} placeholder="a@b.com,c@d.com"/></div>
+          </div>
+          <button className="btn btn-p btn-sm" onClick={saveSch}>➕ Add Schedule</button>
+        </div>
+        <div className="tw md" style={{marginTop:8}}>
+          <table className="dt"><thead><tr><th>Type</th><th>Frequency</th><th>Recipients</th><th>Status</th><th></th></tr></thead>
+          <tbody>{scheds.map(s=><tr key={s.id}>
+            <td style={{fontSize:'.65rem',color:'var(--accent)'}}>{s.report_type}</td>
+            <td style={{fontSize:'.65rem'}}>{s.frequency}</td>
+            <td style={{fontSize:'.62rem',color:'var(--muted)',maxWidth:150,overflow:'hidden',textOverflow:'ellipsis'}}>{s.recipients}</td>
+            <td><span className={`pill ${s.enabled?'pD':'pC'}`}>{s.enabled?'Active':'Off'}</span></td>
+            <td><button className="btn btn-d btn-xs" onClick={()=>delSch(s.id)}>✕</button></td>
+          </tr>)}</tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── HELP PAGE ─────────────────────────────────────────────────────────────────
+function HelpPage(){
+  const sections=[
+    {t:'System Overview',ico:'🏭',c:'var(--accent)',items:[
+      ['What is PickerOS?','A warehouse DO (Delivery Order) allocation system. Given a list of DOs and picking machines, it generates a minute-by-minute schedule assigning each DO to a machine with exact start/end times.'],
+      ['Supported platforms','Windows, Linux, Mac. Runs on any machine with Python 3.9+. No internet required after setup.'],
+      ['Database','SQLite (picker_planning.db) — auto-created on first run. No separate database server needed.'],
+    ]},
+    {t:'Input File Format',ico:'📋',c:'var(--green)',items:[
+      ['DO Sheet (required columns)','DO_NO, FLOOR, PRIORITY, DO_QTY, SEC. Optional: STO_NO, ST_CD, ST_NM.'],
+      ['MACHINE Sheet (required columns)','MACHINE_NO. Optional but recommended: BGT_PICKER (capacity), SCANNER_NAME, FLOOR.'],
+      ['File format','Excel .xlsx or .xls with two sheets named DO and MACHINE (or containing those words).'],
+      ['PRIORITY','Numeric. Lower number = higher priority. P1 is always allocated before P2, P3, etc.'],
+      ['DO_QTY','Total pieces in the DO. Used to calculate how long picking takes on each machine.'],
+    ]},
+    {t:'Shift & Time Rules',ico:'⏰',c:'var(--gold)',items:[
+      ['Shift Start','Default 08:00. New machines start here unless plan is generated mid-shift (then starts from current time).'],
+      ['Warehouse Close','Default 17:00. DOs ending after this are flagged "Over WH" but not dropped.'],
+      ['Lunch Break','Default 13:00–13:45. Allocator automatically skips this window — DOs spanning lunch get extended accordingly.'],
+      ['Effective Minutes','(WH_Close − Shift_Start) − Lunch_Duration = 495 min by default.'],
+      ['PCS/Min','BGT_MACHINE ÷ Effective Minutes. Used to calculate each DO\'s duration.'],
+      ['Mid-shift planning','If you run the plan on today\'s date after shift start, new machines start from current time (rounded to 5 min).'],
+    ]},
+    {t:'Machine Groups & Allocation Logic',ico:'⚙️',c:'var(--a3)',items:[
+      ['G1 / G2 / G3','Labels only — based on BGT_PICKER. G1 ≥ 3000 pcs, G2 ≥ 2000, G3 < 2000. Configurable in Settings.'],
+      ['Allocation rule','Unified pool — all machines compete for all DOs. Highest capacity machines naturally get more work.'],
+      ['Machine selection','For each DO: find machines with enough remaining capacity → pick the one free earliest. Tiebreak: largest remaining capacity wins.'],
+      ['DO order','Within each floor: PRIORITY ASC → SEC ASC → DO_NO ASC. P1 DOs always allocated before P2.'],
+      ['No splitting','Each DO is assigned to exactly one machine. DOs are never split across machines.'],
+      ['Overflow pool','If a floor\'s assigned machines run full, the system pulls from unassigned machines automatically.'],
+    ]},
+    {t:'Multi-Run & DO Locking',ico:'🔒',c:'var(--cyan)',items:[
+      ['Lock rule','A DO with status Planned/Done/Delayed/Not Picked is locked — excluded from future runs.'],
+      ['Unlock','Set status to Cancelled. The DO becomes available for re-planning immediately.'],
+      ['Cancel vs Not Picked','Cancelled = unlocks the DO. Not Picked = acknowledges it wasn\'t done but keeps it locked (must cancel to replan).'],
+      ['Multi-run','Generate R01 in the morning, R02 afternoon. R02 sees only DOs not in R01. Machines continue from where R01 left off.'],
+      ['Time slot freeing','When you cancel DOs, picker_day_state is rebuilt automatically — freed machines start from correct times in next run.'],
+    ]},
+    {t:'Status Lifecycle',ico:'📊',c:'var(--green)',items:[
+      ['Planned','Auto-set on allocation. DO is scheduled, not yet executed.'],
+      ['Done','Set manually. Picking completed on time. Keeps DO locked.'],
+      ['Delayed','Set manually or auto-set if actual_date > plan_date. Keeps DO locked.'],
+      ['Not Picked','DO was not executed. Keeps DO locked — must cancel to replan.'],
+      ['Cancelled','DO freed for re-planning. Picker state rebuilt automatically.'],
+    ]},
+    {t:'Actual Times',ico:'⏱',c:'var(--gold)',items:[
+      ['How to enter','Go to Actual Times page → select plan → select floor/picker → fill start and end times.'],
+      ['Bulk upload','Download template → fill ACTUAL_DATE, ACTUAL_START, ACTUAL_END → re-upload.'],
+      ['Auto-status update','When actuals are saved: if actual_date > plan_date → status set to Delayed, else Done.'],
+      ['Variance','Actual Duration − Planned Duration. Negative = faster than planned.'],
+    ]},
+    {t:'User Roles & Auth',ico:'👥',c:'var(--red)',items:[
+      ['Viewer','No login needed. Can view all pages except generate/edit/admin.'],
+      ['Operator','Login required. Can generate plans, enter actuals, cancel/update status.'],
+      ['Admin','Login required. Full access including user management, email config, settings.'],
+      ['Default credentials','admin / admin123 — change immediately after setup.'],
+    ]},
+    {t:'SOP — Daily Workflow',ico:'📌',c:'var(--pink)',items:[
+      ['Step 1 — Morning plan','Upload template Excel → check Machine Availability panel → verify fill% in Settings → Run Allocation.'],
+      ['Step 2 — Distribute','Download Plan Excel → share PICKER_SCHEDULE sheet with floor supervisors.'],
+      ['Step 3 — Execute','Floor staff pick DOs as per schedule. Note actual start/end times on paper or device.'],
+      ['Step 4 — Update actuals','Enter actual times in Actual Times page (or bulk upload via Excel template).'],
+      ['Step 5 — EOD review','Analytics page → check Completion %, identify delayed/not-picked DOs.'],
+      ['Step 6 — Carry-forward','DOs not picked → cancel them → generate fresh plan for next day including them.'],
+    ]},
+  ];
+  const[open,setOpen]=useState({});
+  return<div>
+    <div className="al al-i" style={{marginBottom:14,fontSize:'.75rem'}}>
+      Complete reference guide for PickerOS. Expand any section to read details.
+    </div>
+    {sections.map(s=><div key={s.t} className="exp" style={{marginBottom:6}}>
+      <div className="exp-h" onClick={()=>setOpen(o=>({...o,[s.t]:!o[s.t]}))}>
+        <span className="exp-ht">
+          <span style={{color:s.c}}>{s.ico}</span>
+          <span style={{fontWeight:600}}>{s.t}</span>
+        </span>
+        <span style={{color:'var(--muted)',fontSize:'.7rem'}}>{open[s.t]?'▲':'▼'}</span>
+      </div>
+      {open[s.t]&&<div className="exp-b">
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          {s.items.map(([k,v])=><tr key={k} style={{borderBottom:'1px solid var(--border)'}}>
+            <td style={{padding:'7px 12px 7px 0',fontWeight:700,fontSize:'.72rem',color:'var(--t2)',width:'28%',verticalAlign:'top'}}>{k}</td>
+            <td style={{padding:'7px 0 7px 12px',fontSize:'.72rem',color:'var(--m2)',lineHeight:1.55,borderLeft:'1px solid var(--border)'}}>{v}</td>
+          </tr>)}
+        </table>
+      </div>}
+    </div>)}
+  </div>;
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
