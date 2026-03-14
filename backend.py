@@ -14,7 +14,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import pandas as pd
 import numpy as np
-from passlib.context import CryptContext
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import Depends
 import openpyxl
@@ -130,37 +129,31 @@ def init_db():
 
 init_db()
 
-# ─── Seed default admin if no users exist ────────────────────────────────────
-def seed_admin():
-    conn = get_db()
-    cnt = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    if cnt == 0:
-        conn.execute("INSERT INTO users(username,hashed_pw,role,email,created_at) VALUES(?,?,?,?,?)",
-                     ('admin', hash_pw('admin123'), 'admin', '', datetime.now().isoformat()))
-        conn.commit()
-    cnt2 = conn.execute("SELECT COUNT(*) FROM email_config").fetchone()[0]
-    if cnt2 == 0:
-        conn.execute("INSERT INTO email_config(id,smtp_host,smtp_port,smtp_user,smtp_pass,from_addr,enabled) VALUES(1,'',587,'','','',0)")
-        conn.commit()
-    conn.close()
-seed_admin()
-
-# ─── Status Constants ─────────────────────────────────────────────────────────
-STATUS_OPTS = ['Planned', 'Done', 'Delayed', 'Not Picked', 'Cancelled']
-STATUS_COLORS = {
-    'Done':'#2ECC71','Planned':'#4F8EF7','Delayed':'#F39C12',
-    'Not Picked':'#7A8099','Cancelled':'#E74C3C'
-}
-
 # ─── Auth ────────────────────────────────────────────────────────────────────
 SECRET_KEY = os.environ.get('PICKER_SECRET', secrets.token_hex(32))
-pwd_ctx    = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer     = HTTPBearer(auto_error=False)
+ROLES      = {'admin': 3, 'operator': 2, 'viewer': 1}
 
-ROLES = {'admin': 3, 'operator': 2, 'viewer': 1}
+# ── Password hashing with stdlib (no bcrypt dependency) ──────────────────────
+import hashlib, hmac as _hmac
+def hash_pw(pw: str) -> str:
+    """PBKDF2-HMAC-SHA256 with random salt — secure, stdlib-only."""
+    salt = secrets.token_hex(16)
+    key  = hashlib.pbkdf2_hmac('sha256', pw.encode(), salt.encode(), 260_000).hex()
+    return f"pbkdf2${salt}${key}"
 
-def hash_pw(pw):  return pwd_ctx.hash(pw)
-def verify_pw(pw, h): return pwd_ctx.verify(pw, h)
+def verify_pw(pw: str, stored: str) -> bool:
+    try:
+        if stored.startswith('pbkdf2$'):
+            _, salt, key = stored.split('$')
+            return _hmac.compare_digest(
+                hashlib.pbkdf2_hmac('sha256', pw.encode(), salt.encode(), 260_000).hex(),
+                key
+            )
+        # Fallback: plain comparison (first-time default before hashing)
+        return _hmac.compare_digest(pw, stored)
+    except Exception:
+        return False
 
 def make_token_jwt(user_id, role):
     import hmac, hashlib, base64
@@ -201,6 +194,28 @@ def require_admin(user=Depends(get_current_user)):
     if not user or ROLES.get(user.get('role',''),0) < 3:
         raise HTTPException(401, 'Admin access required')
     return user
+
+# ─── Seed default admin if no users exist ────────────────────────────────────
+def seed_admin():
+    conn = get_db()
+    cnt = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if cnt == 0:
+        conn.execute("INSERT INTO users(username,hashed_pw,role,email,created_at) VALUES(?,?,?,?,?)",
+                     ('admin', hash_pw('admin123'), 'admin', '', datetime.now().isoformat()))
+        conn.commit()
+    cnt2 = conn.execute("SELECT COUNT(*) FROM email_config").fetchone()[0]
+    if cnt2 == 0:
+        conn.execute("INSERT INTO email_config(id,smtp_host,smtp_port,smtp_user,smtp_pass,from_addr,enabled) VALUES(1,'',587,'','','',0)")
+        conn.commit()
+    conn.close()
+seed_admin()
+
+# ─── Status Constants ─────────────────────────────────────────────────────────
+STATUS_OPTS = ['Planned', 'Done', 'Delayed', 'Not Picked', 'Cancelled']
+STATUS_COLORS = {
+    'Done':'#2ECC71','Planned':'#4F8EF7','Delayed':'#F39C12',
+    'Not Picked':'#7A8099','Cancelled':'#E74C3C'
+}
 
 # ─── Time Helpers ─────────────────────────────────────────────────────────────
 def m2t(m): t=int(round(m)); return f"{t//60:02d}:{t%60:02d}"
