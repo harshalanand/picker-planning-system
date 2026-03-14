@@ -618,6 +618,7 @@ function NewPlanPage({cfg,toast}){
 
         {result&&!result.error&&<div className="al al-i" style={{fontSize:'.72rem',marginBottom:10}}>
           🔁 <b>Run #{result.run_number}</b> for {result.plan_date}
+          {result.plan_start&&<> · ⏰ Schedule starts <b>{result.plan_start}</b> {result.plan_start==='08:00'?'(shift start — future/advance plan)':'(current time — mid-shift run)'}</>
           {result.excluded_count>0&&<> · <b>{result.excluded_count} DOs excluded</b> (locked from prior runs)</>}
         </div>}
 
@@ -642,7 +643,7 @@ function NewPlanPage({cfg,toast}){
             <div className="tok-v">{result.token}</div>
             <div className="tok-m">{result.plan_date} · Run #{result.run_number}{notes?` · ${notes}`:''}</div>
           </div>
-          <div className="g3" style={{gap:8,marginBottom:10}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:7,marginBottom:10}}>
             {[{l:'DOs Allocated',v:result.total_dos,c:'bl'},{l:'Total QTY',v:parseInt(result.total_qty).toLocaleString(),c:'gr'},
               {l:'Pickers Used',v:result.pickers_used,c:'pu'},{l:'Avg Util',v:`${result.avg_util}%`,c:result.avg_util>=cfg.fill_pct?'gr':'go'},
               {l:'Skipped',v:result.skipped,c:result.skipped>0?'re':'gr'},{l:'Excluded',v:result.excluded_count||0,c:result.excluded_count>0?'go':'gr'}]

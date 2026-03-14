@@ -280,103 +280,174 @@ def analyse(do_df,cfg):
     return {'floors':rows,'total_qty':int(do_df['DO_QTY'].sum()),
             'total_dos':len(do_df),'total_req':int(sum(r['req'] for r in rows))}
 
-# ─── Allocation Engine ────────────────────────────────────────────────────────
-def allocate(do_df,machine_df,cfg,demand,prev_state=None,skip_dos=None):
-    S=cfg['start_min']; LS=cfg['lunch_s']; LE=cfg['lunch_e']
-    EFF=cfg['eff_min']; WH_END=cfg['wh_end']; BGT_DEF=cfg['bgt']
-    if prev_state is None: prev_state={}
-    if skip_dos is None:   skip_dos=set()
+# ─── Dynamic plan start time ──────────────────────────────────────────────────
+def get_plan_start_min(plan_date_str: str, cfg: dict) -> float:
+    """
+    Future date  → shift start (e.g. 08:00 = 480 min).
+    Today        → max(shift_start, current_time_rounded_up_to_5min).
+    Past date    → shift start (historical re-plan).
+    """
+    S = float(cfg['start_min'])
+    try:
+        plan_dt = date.fromisoformat(plan_date_str)
+        today   = date.today()
+        if plan_dt == today:
+            now = datetime.now()
+            now_min = now.hour * 60 + now.minute
+            now_min = math.ceil(now_min / 5) * 5   # round UP to next 5-min slot
+            return float(max(S, now_min))
+    except Exception:
+        pass
+    return S
 
-    mdf=machine_df.copy()
-    mdf.columns=[c.strip().upper().replace(' ','_').replace('/','_') for c in mdf.columns]
-    # Deduplicate columns — duplicate names after normalisation cause DataFrame-assignment errors
+# ─── Allocation Engine v2 — Unified mixed pool, no group tier segregation ─────
+#
+# Key design decisions:
+#   1. G1/G2/G3 labels are display-only. No machine is restricted to any
+#      priority range. All machines on a floor compete for all DOs.
+#
+#   2. Machine sort order: BGT descending (highest-capacity first). This means
+#      high-capacity machines get lower picker_no labels and are preferred when
+#      two machines are equally available.
+#
+#   3. DO processing order per floor: PRIORITY ASC → SEC ASC → DO_NO ASC.
+#      Urgent DOs are always assigned first, guaranteeing priority order.
+#
+#   4. Picker selection (greedy, earliest-available-first):
+#        candidates = machines with (bgt - cap_used) >= DO_QTY
+#        sort by: avail_min ASC, then remaining_capacity DESC (tiebreak)
+#        assign to candidates[0]
+#      "Earliest available" = the machine whose clock is furthest back.
+#      This naturally load-balances — a busy machine is skipped until free.
+#      The tiebreak favours larger machines when two finish at the same time,
+#      keeping smaller machines fresher for future small DOs.
+#
+#   5. Dynamic start time:
+#        - New machine, future plan date   → plan_start = shift_start (08:00)
+#        - New machine, today's plan       → plan_start = NOW (rounded up 5 min)
+#        - Machine with prior run state    → plan_start = prior run end time
+#
+def allocate(do_df, machine_df, cfg, demand, prev_state=None, skip_dos=None, plan_date=None):
+    S      = cfg['start_min'];  LS = cfg['lunch_s'];  LE = cfg['lunch_e']
+    EFF    = cfg['eff_min'];    WH_END = cfg['wh_end'];  BGT_DEF = cfg['bgt']
+    if prev_state is None: prev_state = {}
+    if skip_dos   is None: skip_dos   = set()
+
+    # Effective start minute for brand-new machines in this run
+    plan_start = get_plan_start_min(plan_date or '', cfg)
+
+    # ── Normalise machine DataFrame ───────────────────────────────────────────
+    mdf = machine_df.copy()
+    mdf.columns = [c.strip().upper().replace(' ','_').replace('/','_') for c in mdf.columns]
     mdf = mdf.loc[:, ~mdf.columns.duplicated(keep='first')]
-    sc=next((c for c in mdf.columns if 'SCAN' in c),None)
-    if sc and sc!='SCANNER_NAME': mdf.rename(columns={sc:'SCANNER_NAME'},inplace=True)
-    mdf=mdf.drop_duplicates(subset=['MACHINE_NO'],keep='first').reset_index(drop=True)
-    # Find BGT column — try BGT_PICKER, then BGT, then BUDGET, then CAPACITY
-    bgt_col=next((c for c in ['BGT_PICKER','BGT','BUDGET','CAPACITY'] if c in mdf.columns),None)
+    sc  = next((c for c in mdf.columns if 'SCAN' in c), None)
+    if sc and sc != 'SCANNER_NAME': mdf.rename(columns={sc: 'SCANNER_NAME'}, inplace=True)
+    mdf = mdf.drop_duplicates(subset=['MACHINE_NO'], keep='first').reset_index(drop=True)
+
+    bgt_col = next((c for c in ['BGT_PICKER','BGT','BUDGET','CAPACITY'] if c in mdf.columns), None)
     if bgt_col:
         bgt_series = mdf[bgt_col]
-        # Guard: if it somehow became a DataFrame (multi-col), take first col
-        if isinstance(bgt_series, pd.DataFrame): bgt_series = bgt_series.iloc[:,0]
+        if isinstance(bgt_series, pd.DataFrame): bgt_series = bgt_series.iloc[:, 0]
         mdf['BGT_MACHINE'] = pd.to_numeric(bgt_series, errors='coerce').fillna(BGT_DEF).astype(int)
     else:
         mdf['BGT_MACHINE'] = BGT_DEF
-    mdf['GROUP'],mdf['GROUP_TIER']=zip(*mdf['BGT_MACHINE'].apply(auto_group))
-    mdf=mdf.sort_values(['GROUP_TIER','BGT_MACHINE'],ascending=[True,False]).reset_index(drop=True)
-    all_m=mdf.to_dict('records')
 
-    all_prios=sorted(do_df['PRIORITY'].unique()); n_p=len(all_prios)
-    cut1=all_prios[max(0,n_p//3-1)]; cut2=all_prios[max(0,2*n_p//3-1)]
-    def ptier(p): return 1 if p<=cut1 else (2 if p<=cut2 else 3)
+    mdf['GROUP'], mdf['GROUP_TIER'] = zip(*mdf['BGT_MACHINE'].apply(auto_group))
+    # Sort by BGT descending — highest capacity machines get lowest picker index
+    mdf = mdf.sort_values('BGT_MACHINE', ascending=False).reset_index(drop=True)
+    all_m = mdf.to_dict('records')
 
-    pool_map={}; cur=0
-    for row in sorted(demand['floors'],key=lambda r:-r['req']):
-        f=row['floor']; req=row['req']
-        cnt=min(req,len(all_m)-cur)
-        pool_map[f]=all_m[cur:cur+cnt]; cur+=cnt
+    # ── Distribute machines to floors (demand-weighted) ───────────────────────
+    pool_map = {}; cur = 0
+    for row in sorted(demand['floors'], key=lambda r: -r['req']):
+        f   = row['floor']; req = row['req']
+        cnt = min(req, len(all_m) - cur)
+        pool_map[f] = all_m[cur: cur + cnt]; cur += cnt
 
-    plans=[]; skipped=[]
-    work=do_df.sort_values(['FLOOR','PRIORITY','SEC','DO_NO']).reset_index(drop=True)
+    plans   = []
+    skipped = []
+    work    = do_df.sort_values(['FLOOR','PRIORITY','SEC','DO_NO']).reset_index(drop=True)
 
     for floor in sorted(do_df['FLOOR'].unique()):
-        pool=pool_map.get(floor,[])
+        pool = pool_map.get(floor, [])
         if not pool:
-            for _,dr in work[work['FLOOR']==floor].iterrows():
+            for _, dr in work[work['FLOOR'] == floor].iterrows():
                 if str(dr['DO_NO']) not in skip_dos:
-                    skipped.append((str(dr['DO_NO']),f'No machines for Floor {floor}'))
+                    skipped.append((str(dr['DO_NO']), f'No machines assigned to Floor {floor}'))
             continue
 
-        pk=[]
-        for m in pool:
-            key=(str(m['MACHINE_NO']),floor)
-            prev=prev_state.get(key,{})
-            cap=int(prev.get('cap_used',0)); avail=float(prev.get('avail_min',S))
-            bgt=int(m['BGT_MACHINE'])
-            if bgt-cap<=0 or avail>=WH_END: continue
-            pk.append({'cap':cap,'avail':avail,'bgt':bgt,'grp':m['GROUP'],
-                       'tier':m['GROUP_TIER'],'machine':m})
+        # Build unified picker state — one entry per machine, mix of all groups
+        pk = []
+        for idx, m in enumerate(pool):
+            key  = (str(m['MACHINE_NO']), floor)
+            prev = prev_state.get(key, {})
+            bgt  = int(m['BGT_MACHINE'])
+            # Prior run: continue from where it left off; new machine: use plan_start
+            avail = float(prev.get('avail_min', plan_start))
+            cap   = int(prev.get('cap_used', 0))
+            if (bgt - cap) <= 0 or avail >= WH_END: continue   # skip exhausted machines
+            pk.append({'idx': idx, 'cap': cap, 'avail': avail, 'bgt': bgt,
+                       'grp': m['GROUP'], 'machine': m})
 
         if not pk:
-            for _,dr in work[work['FLOOR']==floor].iterrows():
+            for _, dr in work[work['FLOOR'] == floor].iterrows():
                 if str(dr['DO_NO']) not in skip_dos:
-                    skipped.append((str(dr['DO_NO']),f'F{floor}: all pickers exhausted'))
+                    skipped.append((str(dr['DO_NO']), f'F{floor}: all machines full or shift ended'))
             continue
 
-        for _,dr in work[work['FLOOR']==floor].sort_values(['PRIORITY','SEC','DO_NO']).iterrows():
-            do_no=str(dr['DO_NO'])
+        # Assign DOs in priority order to the unified pool
+        for _, dr in work[work['FLOOR'] == floor].sort_values(['PRIORITY','SEC','DO_NO']).iterrows():
+            do_no = str(dr['DO_NO'])
             if do_no in skip_dos: continue
-            prio=int(dr['PRIORITY']); qty=int(dr['DO_QTY']); tier=ptier(prio)
-            assigned=False
-            for try_tier in [tier,tier-1,tier+1,1,2,3]:
-                if try_tier<1 or try_tier>3: continue
-                cands=[(i,p) for i,p in enumerate(pk) if p['tier']==try_tier and p['bgt']-p['cap']>=qty]
-                if not cands: continue
-                cands.sort(key=lambda x:x[1]['avail'])
-                bi,chosen=cands[0]
-                ipm=chosen['bgt']/EFF; dur=qty/ipm
-                ts=chosen['avail']
-                if LS<=ts<LE: ts=LE
-                te=adv(ts,dur,LS,LE)
-                chosen['cap']+=qty; chosen['avail']=te
-                plans.append({
-                    'priority':prio,'do_no':do_no,'sto_no':str(dr.get('STO_NO','')),
-                    'st_cd':str(dr.get('ST_CD','')),'st_nm':str(dr.get('ST_NM','')),
-                    'floor':int(floor),'sec':str(dr['SEC']),'do_qty':qty,'picker_no':bi+1,
-                    'machine_no':str(chosen['machine']['MACHINE_NO']),
-                    'scanner_name':str(chosen['machine'].get('SCANNER_NAME','')),
-                    'grp':chosen['grp'],'bgt_machine':int(chosen['bgt']),
-                    'start_time':m2t(ts),'end_time':m2t(te),
-                    'duration_min':round(dur,2),'pcs_per_min':round(ipm,4),
-                    'cap_used':int(chosen['cap']),'util_pct':round(chosen['cap']/chosen['bgt']*100,1),
-                    'remaining':int(chosen['bgt']-chosen['cap']),'over_wh':int(te>WH_END),
-                    '_avail_min':float(te),
-                }); assigned=True; break
-            if not assigned:
-                skipped.append((do_no,f'F{floor} P{prio}: no picker with capacity+time'))
+            prio = int(dr['PRIORITY']); qty = int(dr['DO_QTY'])
 
-    return pd.DataFrame(plans),mdf,pool_map,skipped
+            # Any machine with enough remaining capacity is a candidate
+            cands = [(i, p) for i, p in enumerate(pk) if p['bgt'] - p['cap'] >= qty]
+            if not cands:
+                skipped.append((do_no, f'F{floor} P{prio}: no machine has {qty} pcs remaining'))
+                continue
+
+            # Earliest available first; tiebreak: largest remaining capacity
+            cands.sort(key=lambda x: (x[1]['avail'], -(x[1]['bgt'] - x[1]['cap'])))
+            bi, chosen = cands[0]
+
+            ipm = chosen['bgt'] / EFF
+            dur = qty / ipm
+            ts  = chosen['avail']
+            if LS <= ts < LE: ts = LE          # snap to post-lunch if inside window
+            te  = adv(ts, dur, LS, LE)
+
+            chosen['cap']   += qty
+            chosen['avail']  = te
+
+            plans.append({
+                'priority':     prio,
+                'do_no':        do_no,
+                'sto_no':       str(dr.get('STO_NO', '')),
+                'st_cd':        str(dr.get('ST_CD', '')),
+                'st_nm':        str(dr.get('ST_NM', '')),
+                'floor':        int(floor),
+                'sec':          str(dr['SEC']),
+                'do_qty':       qty,
+                'picker_no':    chosen['idx'] + 1,
+                'machine_no':   str(chosen['machine']['MACHINE_NO']),
+                'scanner_name': str(chosen['machine'].get('SCANNER_NAME', '')),
+                'grp':          chosen['grp'],
+                'bgt_machine':  int(chosen['bgt']),
+                'start_time':   m2t(ts),
+                'end_time':     m2t(te),
+                'duration_min': round(dur, 2),
+                'pcs_per_min':  round(ipm, 4),
+                'cap_used':     int(chosen['cap']),
+                'util_pct':     round(chosen['cap'] / chosen['bgt'] * 100, 1),
+                'remaining':    int(chosen['bgt'] - chosen['cap']),
+                'over_wh':      int(te > WH_END),
+                '_avail_min':   float(te),
+                'plan_start':   m2t(plan_start),
+            })
+
+    return pd.DataFrame(plans), mdf, pool_map, skipped
+
 
 # ─── Excel Builder ────────────────────────────────────────────────────────────
 def make_excel_bytes(plan_df,cfg,meta=None):
@@ -697,7 +768,7 @@ async def generate_plan(req: GenerateRequest):
 
         demand = analyse(do_rem, cfg)
         prev_state = load_picker_state(plan_date)
-        plan_df, mdf, pool_map, skipped = allocate(do_rem, mac_df, cfg, demand, prev_state, skip_dos=all_excluded)
+        plan_df, mdf, pool_map, skipped = allocate(do_rem, mac_df, cfg, demand, prev_state, skip_dos=all_excluded, plan_date=plan_date)
 
         if plan_df.empty:
             return {'error': True, 'message': f'Allocation produced no results. Skipped: {len(skipped)} DOs.', 'skipped': skipped}
@@ -730,6 +801,7 @@ async def generate_plan(req: GenerateRequest):
             'skipped': len(skipped),
             'skipped_list': [{'do_no': s[0], 'reason': s[1]} for s in skipped],
             'excluded_count': len(do_df) - len(do_rem),
+            'plan_start': plan_df['plan_start'].iloc[0] if not plan_df.empty and 'plan_start' in plan_df.columns else cfg.get('start_str','08:00'),
             'demand': sanitize(demand),
             'grp_summary': grp_summary,
             'details': details,
