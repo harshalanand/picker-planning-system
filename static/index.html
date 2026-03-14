@@ -258,60 +258,123 @@ function PBar({v,max=100,color,h=7,thr}){
 // ── GANTT ─────────────────────────────────────────────────────────────────
 function GanttView({details,wsMin,weMin,fill}){
   const[fl,setFl]=useState(null);
+  const[viewMode,setViewMode]=useState('machine'); // 'machine' or 'picker'
   const tm=s=>{try{const[h,m]=String(s).split(':');return+h*60+ +m}catch{return null}};
+  const m2t=m=>`${String(m/60|0).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
   const floors=[...new Set(details.map(d=>d.floor))].sort();
-  useEffect(()=>{if(floors.length&&fl===null)setFl(floors[0]);},[floors.join()]);
+  useEffect(()=>{if(floors.length&&fl===null)setFl(floors[0]);},[floors.join(',')]);
+
   const flDat=useMemo(()=>{
-    if(fl===null)return{};const fd={};
+    if(fl===null)return{};
+    const fd={};
     details.filter(d=>d.floor===fl).forEach(d=>{
-      const pk=d.picker_no||1;
-      if(!fd[pk])fd[pk]={dos:[],grp:d.grp||'G1',util:0,end:''};
-      fd[pk].dos.push(d);
-      if((d.util_pct||0)>fd[pk].util)fd[pk].util=d.util_pct||0;
-      if(!fd[pk].end||d.end_time>fd[pk].end)fd[pk].end=d.end_time;
-    });return fd;
-  },[details,fl]);
-  const allEnd=useMemo(()=>details.filter(d=>d.floor===fl).reduce((m,d)=>Math.max(m,tm(d.end_time)||0),0),[details,fl]);
+      const key=viewMode==='machine'?String(d.machine_no||d.picker_no):String(d.picker_no||1);
+      if(!fd[key])fd[key]={dos:[],grp:d.grp||'G1',util:0,end:'',bgt:d.bgt_machine||3000,machine_no:d.machine_no,scanner:d.scanner_name};
+      fd[key].dos.push(d);
+      if((d.util_pct||0)>fd[key].util)fd[key].util=d.util_pct||0;
+      if(!fd[key].end||d.end_time>fd[key].end)fd[key].end=d.end_time;
+    });
+    return fd;
+  },[details,fl,viewMode]);
+
+  const allEnd=useMemo(()=>details.filter(d=>d.floor===fl).reduce((mx,d)=>Math.max(mx,tm(d.end_time)||0),0),[details,fl]);
   const SPAN=Math.max(weMin,allEnd+30)-wsMin;
   const pct=v=>((v-wsMin)/SPAN*100).toFixed(2)+'%';
   const ticks=[];for(let t=wsMin;t<=Math.max(weMin,allEnd+60);t+=60)ticks.push(t);
-  const m2t=m=>`${String(m/60|0).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+
+  // Machine utilisation summary for this floor
+  const machSummary=useMemo(()=>{
+    const entries=Object.entries(flDat);
+    const idle=entries.filter(([,v])=>v.util<30).length;
+    const busy=entries.filter(([,v])=>v.util>=fill).length;
+    const avgUtil=entries.length?Math.round(entries.reduce((s,[,v])=>s+v.util,0)/entries.length):0;
+    return{total:entries.length,idle,busy,avgUtil};
+  },[flDat,fill]);
+
   return<div>
-    <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
-      {floors.map(f=><button key={f} className={`btn btn-xs ${fl===f?'btn-p':'btn-g'}`} onClick={()=>setFl(f)}>Floor {f}</button>)}
+    {/* Floor + view mode selector */}
+    <div style={{display:'flex',gap:8,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
+      <div style={{display:'flex',gap:4}}>
+        {floors.map(f=><button key={f} className={`btn btn-xs ${fl===f?'btn-p':'btn-g'}`} onClick={()=>setFl(f)}>Floor {f}</button>)}
+      </div>
+      <div style={{marginLeft:'auto',display:'flex',gap:4}}>
+        <button className={`btn btn-xs ${viewMode==='machine'?'btn-p':'btn-g'}`} onClick={()=>setViewMode('machine')}>🔧 Machine View</button>
+        <button className={`btn btn-xs ${viewMode==='picker'?'btn-p':'btn-g'}`} onClick={()=>setViewMode('picker')}>👷 Picker View</button>
+      </div>
     </div>
+
+    {/* Summary bar */}
+    {fl!==null&&Object.keys(flDat).length>0&&<div style={{display:'flex',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+      {[{l:'Machines',v:machSummary.total,c:'var(--accent)'},{l:'At Target',v:machSummary.busy,c:'var(--green)'},
+        {l:'Idle (<30%)',v:machSummary.idle,c:'var(--red)'},{l:'Avg Util',v:`${machSummary.avgUtil}%`,c:'var(--gold)'}]
+        .map(x=><div key={x.l} style={{background:'var(--card2)',border:'1px solid var(--border)',borderRadius:6,padding:'5px 10px'}}>
+          <div style={{fontSize:'.52rem',color:'var(--muted)',textTransform:'uppercase'}}>{x.l}</div>
+          <div style={{fontFamily:'var(--mono)',fontWeight:700,color:x.c,fontSize:'.9rem'}}>{x.v}</div>
+        </div>)}
+    </div>}
+
     {fl!==null&&<div className="card" style={{padding:'12px 14px'}}>
-      {/* Prio legend */}
-      <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8,paddingLeft:97}}>
+      {/* Legend */}
+      <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8,paddingLeft:viewMode==='machine'?145:97}}>
         {[...new Set(Object.values(flDat).flatMap(p=>p.dos.map(d=>d.priority)))].sort((a,b)=>a-b).map(p=>
-          <span key={p} style={{background:PCOL[(p-1)%PCOL.length],color:'#fff',fontSize:'.5rem',fontWeight:700,padding:'1px 6px',borderRadius:8}}>P{p}</span>)}
-        <span style={{fontSize:'.5rem',color:'var(--muted)',marginLeft:4,alignSelf:'center'}}>Red line = {m2t(weMin)} close · Lunch shaded</span>
+          <span key={p} style={{background:PCOL[(p-1)%PCOL.length],color:'#fff',fontSize:'.49rem',fontWeight:700,padding:'1px 5px',borderRadius:6}}>P{p}</span>)}
+        <span style={{fontSize:'.49rem',color:'var(--muted)',marginLeft:6,alignSelf:'center'}}>Red line = {m2t(weMin)} · Dashed = Over WH</span>
       </div>
       {/* Time axis */}
-      <div style={{position:'relative',height:14,paddingLeft:97,marginBottom:4}}>
-        {ticks.map(t=><div key={t} style={{position:'absolute',left:`calc(97px + ${pct(t)})`,fontSize:'.48rem',color:'var(--muted)',fontFamily:'var(--mono)',transform:'translateX(-50%)'}}>{m2t(t)}</div>)}
+      <div style={{position:'relative',height:14,paddingLeft:viewMode==='machine'?145:97,marginBottom:4}}>
+        {ticks.map(t=><div key={t} style={{position:'absolute',left:`calc(${viewMode==='machine'?145:97}px + ${pct(t)})`,fontSize:'.47rem',color:'var(--muted)',fontFamily:'var(--mono)',transform:'translateX(-50%)'}}>{m2t(t)}</div>)}
       </div>
-      <div style={{maxHeight:380,overflowY:'auto'}}>
-        {Object.entries(flDat).sort((a,b)=>+a[0]-+b[0]).map(([pk,pkd])=>{
+      <div style={{maxHeight:460,overflowY:'auto'}}>
+        {Object.entries(flDat).sort((a,b)=>{
+          // For machine view sort by util% ascending so idle machines show first (easy to spot)
+          if(viewMode==='machine')return a[1].util-b[1].util;
+          return +a[0]-+b[0];
+        }).map(([key,pkd])=>{
           const uc=pkd.util>=fill?'var(--green)':pkd.util>=50?'var(--gold)':'var(--red)';
           const gc={G1:'var(--green)',G2:'var(--accent)',G3:'var(--gold)'}[pkd.grp]||'var(--accent)';
-          return<div key={pk} className="gt-row">
-            <div className="gt-lbl"><span style={{color:gc,fontWeight:700}}>{pkd.grp}</span> P{String(pk).padStart(2,'0')} <span style={{color:uc}}>{Math.round(pkd.util)}%</span></div>
+          const lblWidth=viewMode==='machine'?145:97;
+          return<div key={key} className="gt-row">
+            <div className="gt-lbl" style={{width:lblWidth}}>
+              {viewMode==='machine'?<>
+                <div style={{display:'flex',alignItems:'center',gap:3,justifyContent:'flex-end'}}>
+                  <span style={{fontSize:'.55rem',fontFamily:'var(--mono)',color:'var(--t2)',fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:90}}>{key}</span>
+                  <GPill g={pkd.grp}/>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:3,justifyContent:'flex-end',marginTop:1}}>
+                  <div style={{flex:1,maxWidth:70}}><div style={{height:3,background:'var(--border)',borderRadius:2,overflow:'hidden'}}>
+                    <div style={{height:'100%',width:`${pkd.util}%`,background:uc,borderRadius:2}}/>
+                  </div></div>
+                  <span style={{fontSize:'.52rem',color:uc,fontFamily:'var(--mono)',fontWeight:700,flexShrink:0}}>{Math.round(pkd.util)}%</span>
+                </div>
+                {pkd.scanner&&<div style={{fontSize:'.47rem',color:'var(--muted)',textAlign:'right',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{pkd.scanner}</div>}
+              </>:<>
+                <span style={{color:gc,fontWeight:700}}>P{String(key).padStart(2,'0')}</span>
+                <span style={{color:uc,marginLeft:4,fontSize:'.57rem'}}>{Math.round(pkd.util)}%</span>
+              </>}
+            </div>
             <div className="gt-track">
-              <div style={{position:'absolute',left:pct(Math.max(wsMin,780)),width:`${(Math.min(825,Math.max(weMin,allEnd+30))-Math.max(wsMin,780))/SPAN*100}%`,height:'100%',background:'rgba(239,68,68,.07)'}}/>
+              {/* Lunch shade */}
+              <div style={{position:'absolute',left:pct(Math.max(wsMin,780)),width:`${(Math.min(825,Math.max(weMin,allEnd+30))-Math.max(wsMin,780))/SPAN*100}%`,height:'100%',background:'rgba(239,68,68,.06)'}}/>
+              {/* WH close line */}
               <div style={{position:'absolute',left:pct(weMin),top:-2,bottom:-2,width:2,background:'rgba(239,68,68,.5)',zIndex:4}}/>
               {pkd.dos.map((d,i)=>{
                 const ts=tm(d.start_time),te=tm(d.end_time);if(!ts||!te)return null;
                 const l=Math.max(0,(ts-wsMin)/SPAN*100),w=Math.min(100-l,(te-ts)/SPAN*100);
                 const col=PCOL[(+d.priority-1)%PCOL.length];
-                return<div key={i} title={`DO:${d.do_no} ${d.start_time}–${d.end_time} ${d.do_qty}pcs P${d.priority}`}
-                  style={{position:'absolute',left:`${l}%`,width:`${Math.max(w,.35)}%`,height:'100%',background:col,
-                    opacity:d.over_wh?.7:1,borderRadius:2,border:d.over_wh?'1px dashed rgba(239,68,68,.8)':'none',cursor:'default'}}>
-                  {w>3&&<span style={{fontSize:'.46rem',fontWeight:700,color:'rgba(255,255,255,.9)',padding:'0 2px',overflow:'hidden',whiteSpace:'nowrap',display:'block'}}>{d.do_qty}</span>}
+                const tip=`DO: ${d.do_no}
+Machine: ${d.machine_no}
+${d.start_time}–${d.end_time}
+${d.do_qty.toLocaleString()} pcs · P${d.priority} · ${d.sec}
+Util: ${d.util_pct}%`;
+                return<div key={i} title={tip}
+                  style={{position:'absolute',left:`${l}%`,width:`${Math.max(w,.3)}%`,height:'100%',background:col,
+                    opacity:d.over_wh?.65:1,borderRadius:2,
+                    border:d.over_wh?'1px dashed rgba(239,68,68,.85)':'none',cursor:'default'}}>
+                  {w>4&&<span style={{fontSize:'.44rem',fontWeight:700,color:'rgba(255,255,255,.9)',padding:'0 2px',overflow:'hidden',whiteSpace:'nowrap',display:'block',lineHeight:'18px'}}>{d.do_qty}</span>}
                 </div>;
               })}
             </div>
-            <div className="gt-end">{pkd.end}</div>
+            <div className="gt-end" style={{width:50,fontSize:'.53rem'}}>{pkd.end}</div>
           </div>;
         })}
       </div>
@@ -393,7 +456,7 @@ function MachineAvailability({grp_summary,floor_avail,floor_required,summary,cfg
 
     {/* Per-floor availability vs required */}
     {floors.length>0&&<div className="card" style={{padding:'12px 14px'}}>
-      <div style={{fontSize:'.6rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.12em',marginBottom:9,fontWeight:700}}>Machine Availability vs Demand — Per Floor</div>
+      <div style={{fontSize:'.6rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.12em',marginBottom:9,fontWeight:700}}>Machine Availability vs Demand — Per Floor <span style={{color:'var(--accent)',textTransform:'none',letterSpacing:'normal',fontWeight:400}}>· at {cfg.fill_pct}% fill target · BGT {cfg.bgt.toLocaleString()}</span></div>
       <div style={{display:'grid',gridTemplateColumns:'50px 1fr 80px 80px 90px 130px',gap:6,marginBottom:5,fontSize:'.53rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:700}}>
         <span>Floor</span><span>Load Bar</span><span className="n" style={{textAlign:'right'}}>Required</span><span className="n" style={{textAlign:'right'}}>Available</span><span className="n" style={{textAlign:'right'}}>Surplus</span><span>G1/G2/G3 Mix</span>
       </div>
@@ -541,7 +604,7 @@ function NewPlanPage({cfg,toast}){
 
   const upload=async f=>{
     if(!f)return;setFile(f);setParsed(null);setResult(null);setLoading(true);
-    try{const fd=new FormData();fd.append('file',f);const d=await apiFetch('/api/excel/parse',{method:'POST',body:fd});setParsed(d);setFloorAvail(d.floor_avail||{});setFloorReq(d.floor_required||{});toast(`✓ ${d.summary.total_dos} DOs · ${d.summary.total_machines||d.summary.machines} machines · G1:${d.summary.g1_count||0} G2:${d.summary.g2_count||0} G3:${d.summary.g3_count||0}`,'ok');}
+    try{const fd=new FormData();fd.append('file',f);const d=await apiFetch(`/api/excel/parse?fill_pct=${cfg.fill_pct}&bgt=${cfg.bgt}`,{method:'POST',body:fd});setParsed(d);setFloorAvail(d.floor_avail||{});setFloorReq(d.floor_required||{});toast(`✓ ${d.summary.total_dos} DOs · ${d.summary.total_machines||d.summary.machines} machines · G1:${d.summary.g1_count||0} G2:${d.summary.g2_count||0} G3:${d.summary.g3_count||0}`,'ok');}
     catch(e){toast(e.message,'err');}finally{setLoading(false);}
   };
 
@@ -1105,16 +1168,23 @@ function AnalyticsPage({toast}){
   const load=async tok=>{setSel(tok);setData(null);if(!tok)return;
     setLoading(true);try{setData(await apiFetch(`/api/analytics/${tok}`));}catch(e){toast(e.message,'err');}finally{setLoading(false);}};
   const bw=(v,mx)=>mx?`${Math.round(v/mx*100)}%`:'0%';
+  const[atab,setAtab]=useState('overview');
   return<div>
     <div style={{marginBottom:13}}>
       <div className="sec">Select Plan for Analytics</div>
-      <select value={sel} onChange={e=>load(e.target.value)} style={{maxWidth:440,fontSize:'.75rem'}}>
+      <select value={sel} onChange={e=>{load(e.target.value);setAtab('overview');}} style={{maxWidth:440,fontSize:'.75rem'}}>
         <option value="">— Select plan token —</option>
         {plans.map(p=><option key={p.token} value={p.token}>{p.token} — {p.plan_date} · {p.total_dos} DOs</option>)}
       </select>
     </div>
     {loading&&<div className="ctr" style={{padding:40}}><Spin/></div>}
     {data&&<>
+      <div className="stabs" style={{marginBottom:13}}>
+        {[['overview','📊 Overview'],['floor','🏢 Floor Breakdown'],['picker','👷 Picker Performance'],['details','📋 Plan Details'],['gantt','📈 Machine Gantt']].map(([id,lbl])=>
+          <div key={id} className={`stab${atab===id?' on':''}`} onClick={()=>setAtab(id)}>{lbl}</div>)}
+      </div>
+    </>}
+    {data&&atab==='overview'&&<>
       <div className="g6" style={{gap:8,marginBottom:13}}>
         {[{l:'Completion',v:`${data.completion_pct}%`,c:'gr',s:`${data.status_counts?.Done||0} of ${data.total} done`},
           {l:'Total DOs',v:data.total,c:'bl'},{l:'Done',v:data.status_counts?.Done||0,c:'gr'},
@@ -1196,6 +1266,106 @@ function AnalyticsPage({toast}){
         </div>
       </div>
     </>}
+
+    {/* ── PLAN DETAILS TAB ──────────────────────────────────────────── */}
+    {data&&atab==='details'&&<AnalyticsPlanDetails token={sel}/>}
+
+    {/* ── MACHINE GANTT TAB ─────────────────────────────────────────── */}
+    {data&&atab==='gantt'&&<AnalyticsGantt token={sel} cfg={{start_min:480,wh_end:1020,fill_pct:70}}/>}
+  </div>;
+}
+
+// ── Analytics sub-components ──────────────────────────────────────────────────
+function AnalyticsPlanDetails({token}){
+  const[detail,setDetail]=useState(null);const[loading,setLoading]=useState(false);
+  const[qF,setQF]=useState('');const[flF,setFlF]=useState('All');const[stF,setStF]=useState('All');
+  const[grF,setGrF]=useState('All');
+  useEffect(()=>{if(!token)return;setLoading(true);
+    apiFetch(`/api/plans/${token}`).then(d=>{setDetail(d);setLoading(false);}).catch(()=>setLoading(false));
+  },[token]);
+  const rows=useMemo(()=>{
+    if(!detail)return[];let r=detail.details;
+    const q=qF.toLowerCase();
+    if(q)r=r.filter(d=>[d.do_no,d.machine_no,d.sec,d.scanner_name].some(v=>String(v||'').toLowerCase().includes(q)));
+    if(flF!=='All')r=r.filter(d=>String(d.floor)===flF);
+    if(stF!=='All')r=r.filter(d=>(d.status||'Planned')===stF);
+    if(grF!=='All')r=r.filter(d=>d.grp===grF);
+    return r;
+  },[detail,qF,flF,stF,grF]);
+  const{page,setPage,total,slice}=usePager(rows,80);
+  const floors=detail?[...new Set(detail.details.map(d=>String(d.floor)))].sort():[];
+  if(loading)return<div className="ctr" style={{padding:40}}><Spin/></div>;
+  if(!detail)return<div className="al al-i">Loading plan details...</div>;
+  return<div>
+    <div className="fbar">
+      <input style={{minWidth:200,height:31,fontSize:'.73rem'}} placeholder="🔍 DO / Machine / SEC..." value={qF} onChange={e=>setQF(e.target.value)}/>
+      <select style={{height:31,width:'auto',fontSize:'.73rem'}} value={flF} onChange={e=>setFlF(e.target.value)}>
+        <option>All</option>{floors.map(f=><option key={f}>F{f}</option>)}
+      </select>
+      <select style={{height:31,width:'auto',fontSize:'.73rem'}} value={stF} onChange={e=>setStF(e.target.value)}>
+        <option>All</option>{['Planned','Done','Delayed','Not Picked','Cancelled'].map(s=><option key={s}>{s}</option>)}
+      </select>
+      <select style={{height:31,width:'auto',fontSize:'.73rem'}} value={grF} onChange={e=>setGrF(e.target.value)}>
+        <option>All</option>{['G1','G2','G3'].map(g=><option key={g}>{g}</option>)}
+      </select>
+      <span style={{fontSize:'.68rem',color:'var(--muted)'}}>{rows.length} rows</span>
+      <a href={`${API}/api/plans/${token}/excel`} download style={{marginLeft:'auto'}}>
+        <button className="btn btn-gr btn-sm">⬇️ Download Excel</button>
+      </a>
+    </div>
+    <div className="tw xl">
+      <table className="dt"><thead><tr>
+        <th>Status</th><th>P#</th><th>DO No</th><th>Floor</th><th>SEC</th><th>QTY</th>
+        <th>Machine</th><th>Scanner</th><th>Grp</th><th>BGT</th>
+        <th>Start</th><th>End</th><th>Dur</th><th>Util%</th><th>Cap Used</th><th>Remaining</th><th>Over WH</th>
+        <th>Act Start</th><th>Act End</th>
+      </tr></thead><tbody>
+        {slice.map((d,i)=><tr key={i} style={(d.status==='Cancelled'||d.status==='Not Picked')?{opacity:.55}:{}}>
+          <td><SPill s={d.status||'Planned'}/></td>
+          <td><span style={{fontSize:'.58rem',fontWeight:700,color:PCOL[(+d.priority-1)%PCOL.length]}}>P{d.priority}</span></td>
+          <td style={{fontWeight:700,color:'var(--t2)'}}>{d.do_no}</td>
+          <td><FL f={d.floor}/></td><td style={{fontSize:'.65rem'}}>{d.sec}</td>
+          <td className="n">{(d.do_qty||0).toLocaleString()}</td>
+          <td style={{fontFamily:'var(--mono)',fontSize:'.67rem',fontWeight:600}}>{d.machine_no}</td>
+          <td style={{fontSize:'.62rem',color:'var(--muted)'}}>{d.scanner_name||'—'}</td>
+          <td><GPill g={d.grp}/></td>
+          <td className="n" style={{fontSize:'.63rem'}}>{(d.bgt_machine||0).toLocaleString()}</td>
+          <td style={{color:'var(--accent)',fontFamily:'var(--mono)',fontSize:'.67rem'}}>{d.start_time}</td>
+          <td style={{color:d.over_wh?'var(--red)':'var(--muted)',fontFamily:'var(--mono)',fontSize:'.67rem'}}>{d.end_time}</td>
+          <td className="n" style={{fontSize:'.63rem'}}>{Math.round(d.duration_min||0)}m</td>
+          <td className="n">
+            <div style={{display:'flex',alignItems:'center',gap:3}}>
+              <div className="pb sl" style={{width:40}}><div className="pbf" style={{width:`${d.util_pct||0}%`,background:(d.util_pct||0)>=70?'var(--green)':'var(--gold)'}}/></div>
+              <span style={{fontSize:'.6rem',color:(d.util_pct||0)>=70?'var(--green)':'var(--gold)',fontFamily:'var(--mono)'}}>{d.util_pct}%</span>
+            </div>
+          </td>
+          <td className="n" style={{fontFamily:'var(--mono)',fontSize:'.63rem'}}>{(d.cap_used||0).toLocaleString()}</td>
+          <td className="n" style={{fontFamily:'var(--mono)',fontSize:'.63rem',color:'var(--muted)'}}>{(d.remaining||0).toLocaleString()}</td>
+          <td>{d.over_wh?<span style={{color:'var(--red)',fontSize:'.65rem'}}>⚠ Over</span>:'—'}</td>
+          <td style={{color:'var(--green)',fontFamily:'var(--mono)',fontSize:'.65rem'}}>{d.actual_start||'—'}</td>
+          <td style={{color:'var(--green)',fontFamily:'var(--mono)',fontSize:'.65rem'}}>{d.actual_end||'—'}</td>
+        </tr>)}
+      </tbody></table>
+    </div>
+    <Pager page={page} total={total} setPage={setPage} count={rows.length}/>
+  </div>;
+}
+
+function AnalyticsGantt({token,cfg}){
+  const[detail,setDetail]=useState(null);const[loading,setLoading]=useState(false);
+  const[settings,setSettings]=useState(()=>{try{const s=localStorage.getItem('picker_cfg');return s?JSON.parse(s):cfg;}catch{return cfg;}});
+  useEffect(()=>{if(!token)return;setLoading(true);
+    apiFetch(`/api/plans/${token}`).then(d=>{setDetail(d);setLoading(false);}).catch(()=>setLoading(false));
+  },[token]);
+  if(loading)return<div className="ctr" style={{padding:40}}><Spin/></div>;
+  if(!detail)return<div className="al al-i">Loading plan for Gantt...</div>;
+  const s=settings||cfg;
+  return<div>
+    <div className="al al-i" style={{marginBottom:10,fontSize:'.73rem'}}>
+      Showing machine-wise Gantt for <b>{token}</b> · {detail.details.length} DOs
+      · Sorted by utilisation (idle machines first — easy to spot underuse)
+    </div>
+    <GanttView details={detail.details} wsMin={s.start_min||480} weMin={s.wh_end||1020} fill={s.fill_pct||70}/>
   </div>;
 }
 

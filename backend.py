@@ -358,11 +358,15 @@ def allocate(do_df, machine_df, cfg, demand, prev_state=None, skip_dos=None, pla
     all_m = mdf.to_dict('records')
 
     # ── Distribute machines to floors (demand-weighted) ───────────────────────
+    # Each floor gets its required count from the sorted pool.
+    # Remaining machines go into an overflow pool shared across all floors.
     pool_map = {}; cur = 0
     for row in sorted(demand['floors'], key=lambda r: -r['req']):
         f   = row['floor']; req = row['req']
         cnt = min(req, len(all_m) - cur)
         pool_map[f] = all_m[cur: cur + cnt]; cur += cnt
+    # Overflow: machines not assigned to any floor — available to any floor that runs dry
+    overflow_pool = all_m[cur:]
 
     plans   = []
     skipped = []
@@ -404,7 +408,22 @@ def allocate(do_df, machine_df, cfg, demand, prev_state=None, skip_dos=None, pla
             # Any machine with enough remaining capacity is a candidate
             cands = [(i, p) for i, p in enumerate(pk) if p['bgt'] - p['cap'] >= qty]
             if not cands:
-                skipped.append((do_no, f'F{floor} P{prio}: no machine has {qty} pcs remaining'))
+                # Try pulling from overflow pool — machines not initially assigned to this floor
+                for om in overflow_pool:
+                    key = (str(om['MACHINE_NO']), floor)
+                    if any(p['machine']['MACHINE_NO'] == om['MACHINE_NO'] for p in pk):
+                        continue  # already in pool
+                    prev = prev_state.get(key, {})
+                    bgt  = int(om['BGT_MACHINE'])
+                    avail_o = float(prev.get('avail_min', plan_start))
+                    cap_o   = int(prev.get('cap_used', 0))
+                    if (bgt - cap_o) <= 0 or avail_o >= WH_END: continue
+                    new_idx = len(pk)
+                    pk.append({'idx': new_idx, 'cap': cap_o, 'avail': avail_o, 'bgt': bgt,
+                               'grp': om['GROUP'], 'machine': om})
+                cands = [(i, p) for i, p in enumerate(pk) if p['bgt'] - p['cap'] >= qty]
+            if not cands:
+                skipped.append((do_no, f'F{floor} P{prio}: no machine has {qty} pcs remaining (all {len(pk)} machines full)'))
                 continue
 
             # Earliest available first; tiebreak: largest remaining capacity
@@ -627,7 +646,7 @@ class StatusUpdate(BaseModel):
 # ─── API Routes ───────────────────────────────────────────────────────────────
 
 @app.post("/api/excel/parse")
-async def parse_excel(file: UploadFile = File(...)):
+async def parse_excel(file: UploadFile = File(...), fill_pct: float = 70, bgt: int = 3000):
     """Parse DO+Machine Excel, return JSON."""
     try:
         content = await file.read()
@@ -686,14 +705,13 @@ async def parse_excel(file: UploadFile = File(...)):
             grp_summary[g] = {'machines': len(grp), 'avg_bgt': int(grp['BGT_PICKER'].mean()),
                               'bgt_sum': int(grp['BGT_PICKER'].sum())}
 
-        # Required machines estimate per floor (based on DO demand)
+        # Required machines estimate per floor — use caller's fill_pct and bgt
         floor_required = {}
         if 'FLOOR' in do_df.columns:
-            fill_pct = 70  # default
-            bgt_def = int(mc_df['BGT_PICKER'].mean()) if len(mc_df) else 3000
+            bgt_def = bgt if bgt > 0 else (int(mc_df['BGT_PICKER'].mean()) if len(mc_df) else 3000)
             for f, grp in do_df.groupby('FLOOR'):
                 qty = int(grp['DO_QTY'].sum())
-                import math; req = max(1, math.ceil(qty / (bgt_def * fill_pct / 100)))
+                req = max(1, math.ceil(qty / (bgt_def * fill_pct / 100)))
                 avail = floor_avail.get(int(f), {}).get('machines', len(mc_df))
                 floor_required[int(f)] = {'required': req, 'available': avail, 'surplus': avail - req}
 
