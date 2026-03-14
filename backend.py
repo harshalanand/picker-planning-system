@@ -210,20 +210,115 @@ def load_picker_state(plan_date):
     conn.close()
     return {(r['machine_no'],r['floor']):{'cap_used':r['cap_used'],'avail_min':r['avail_min']} for r in rows}
 
+def rebuild_picker_state_for_date(plan_date: str):
+    """
+    Recompute picker_day_state for a date from scratch using only
+    ACTIVE (non-cancelled, non-deleted) DOs in plan_details.
+
+    Called after any DO status change (cancel, delete) so that the next
+    allocation run sees the correct avail_min and cap_used — not phantom
+    capacity from DOs that no longer exist.
+
+    Logic:
+      For each (machine_no, floor) on this date:
+        - Collect all plan_details rows that are NOT Cancelled / Deleted
+        - max(cap_used) across those rows  → new cap_used
+        - max(end_time as minutes) across those rows → new avail_min
+        - If zero active DOs remain → delete the state row entirely
+          (machine is fully free; next run starts it from shift start)
+    """
+    conn = get_db()
+    # Fetch all active DOs for this date
+    rows = conn.execute("""
+        SELECT machine_no, floor, cap_used, end_time
+        FROM plan_details
+        WHERE plan_date=?
+          AND COALESCE(status,'Planned') NOT IN ('Cancelled','Deleted')
+    """, (plan_date,)).fetchall()
+
+    def t2m(s):
+        try:
+            h, m = str(s).strip().split(':'); return int(h)*60+int(m)
+        except: return 0
+
+    # Group by (machine_no, floor)
+    state = {}
+    for r in rows:
+        key = (str(r['machine_no']), int(r['floor']))
+        if key not in state:
+            state[key] = {'cap': 0, 'avail': 0}
+        state[key]['cap']   = max(state[key]['cap'],   int(r['cap_used'] or 0))
+        state[key]['avail'] = max(state[key]['avail'],  t2m(r['end_time']))
+
+    # Get all existing state rows for this date
+    existing = conn.execute(
+        "SELECT machine_no, floor FROM picker_day_state WHERE plan_date=?",
+        (plan_date,)
+    ).fetchall()
+
+    # Delete rows that now have zero active DOs (machine fully freed)
+    freed = 0
+    for er in existing:
+        key = (str(er['machine_no']), int(er['floor']))
+        if key not in state:
+            conn.execute(
+                "DELETE FROM picker_day_state WHERE plan_date=? AND machine_no=? AND floor=?",
+                (plan_date, er['machine_no'], er['floor'])
+            )
+            freed += 1
+
+    # Update rows that still have active DOs
+    last_tok = conn.execute(
+        "SELECT token FROM plans WHERE plan_date=? ORDER BY run_number DESC LIMIT 1",
+        (plan_date,)
+    ).fetchone()
+    tok = last_tok['token'] if last_tok else ''
+
+    for (mno, fl), v in state.items():
+        conn.execute("""
+            INSERT INTO picker_day_state(plan_date,machine_no,floor,cap_used,avail_min,last_token)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(plan_date,machine_no,floor) DO UPDATE SET
+              cap_used=excluded.cap_used,
+              avail_min=excluded.avail_min,
+              last_token=excluded.last_token
+        """, (plan_date, mno, fl, v['cap'], float(v['avail']), tok))
+
+    conn.commit(); conn.close()
+    return {'rebuilt': len(state), 'freed': freed}
+
+
 def cancel_plan(token):
     """Cancel all DOs in a plan — frees them for re-planning on any date."""
+
+def cancel_plan(token):
+    """Cancel all DOs in a plan — frees them for re-planning on any date.
+    Also rebuilds picker_day_state so next run gets correct start times."""
     conn=get_db(); now=datetime.now().isoformat()
+    # Get plan_date before deleting
+    row = conn.execute("SELECT plan_date FROM plans WHERE token=?", (token,)).fetchone()
+    plan_date = row['plan_date'] if row else None
     conn.execute("""UPDATE plan_details SET status='Cancelled',
         cancel_reason='Plan cancelled',cancelled_at=? WHERE token=?""",(now,token))
     conn.execute("DELETE FROM plans WHERE token=?",(token,))
     conn.commit(); conn.close()
+    # Rebuild state — freed slots are now available for next run
+    if plan_date:
+        rebuild_picker_state_for_date(plan_date)
 
 def update_do_status(token,do_no,status,cancel_reason=''):
     conn=get_db(); now=datetime.now().isoformat()
     conn.execute("""UPDATE plan_details SET status=?,cancel_reason=?,
         cancelled_at=CASE WHEN ?='Cancelled' THEN ? ELSE cancelled_at END
         WHERE token=? AND do_no=?""",(status,cancel_reason,status,now,token,str(do_no)))
+    # Get plan_date for state rebuild
+    row = conn.execute("SELECT plan_date FROM plan_details WHERE token=? AND do_no=? LIMIT 1",
+                       (token,str(do_no))).fetchone()
+    plan_date = row['plan_date'] if row else None
     conn.commit(); conn.close()
+    # Rebuild picker_day_state whenever a DO moves to a freeing status
+    if plan_date and status in ('Cancelled','Deleted','Not Picked'):
+        rebuild_picker_state_for_date(plan_date)
 
 def list_plans(plan_date=None,limit=200):
     conn=get_db()
@@ -862,6 +957,16 @@ def api_cancel_plan(token: str):
     cancel_plan(token)
     return {'success': True, 'message': f'Plan {token} cancelled. All DOs are now free to re-plan.'}
 
+@app.post("/api/plans/{token}/rebuild-state")
+def api_rebuild_state(token: str):
+    """Manually rebuild picker_day_state for this plan's date.
+    Use this if state seems wrong after bulk cancel/status operations."""
+    plans = list_plans()
+    meta  = next((p for p in plans if p['token'] == token), None)
+    if not meta: raise HTTPException(404, "Plan not found")
+    result = rebuild_picker_state_for_date(meta['plan_date'])
+    return {'success': True, 'plan_date': meta['plan_date'], **result}
+
 @app.get("/api/plans/{token}/excel")
 def api_download_excel(token: str):
     details = load_plan_details(token)
@@ -943,11 +1048,25 @@ async def api_bulk_actuals(token: str, file: UploadFile = File(...)):
 
 @app.post("/api/status/{token}")
 def api_update_status(token: str, updates: List[StatusUpdate]):
-    """Bulk status update. Cancelled DOs are freed for re-planning automatically."""
+    """Bulk status update. Rebuilds picker_day_state once at the end (not per-row)."""
+    conn = get_db(); now = datetime.now().isoformat()
+    count = 0; plan_date = None; needs_rebuild = False
     for u in updates:
-        if u.status in STATUS_OPTS:
-            update_do_status(token, u.do_no, u.status, u.cancel_reason)
-    return {'success': True, 'updated': len(updates)}
+        if u.status not in STATUS_OPTS: continue
+        conn.execute("""UPDATE plan_details SET status=?,cancel_reason=?,
+            cancelled_at=CASE WHEN ?='Cancelled' THEN ? ELSE cancelled_at END
+            WHERE token=? AND do_no=?""",
+            (u.status, u.cancel_reason, u.status, now, token, str(u.do_no)))
+        count += 1
+        if u.status in ('Cancelled','Deleted','Not Picked'): needs_rebuild = True
+    if not plan_date:
+        row = conn.execute("SELECT plan_date FROM plans WHERE token=? LIMIT 1",(token,)).fetchone()
+        if row: plan_date = row['plan_date']
+    conn.commit(); conn.close()
+    # Single rebuild after all updates
+    if needs_rebuild and plan_date:
+        rebuild_picker_state_for_date(plan_date)
+    return {'success': True, 'updated': count}
 
 @app.post("/api/status/{token}/bulk-upload")
 async def api_bulk_status(token: str, file: UploadFile = File(...)):
@@ -959,13 +1078,25 @@ async def api_bulk_status(token: str, file: UploadFile = File(...)):
         filled = xl[xl['NEW_STATUS'].notna() & (xl['NEW_STATUS'].astype(str).str.strip()!='')]
         if filled.empty:
             return {'success': False, 'message': 'No rows with NEW_STATUS filled.'}
-        count = 0
+        conn2 = get_db(); now2 = datetime.now().isoformat()
+        count = 0; needs_rebuild = False; plan_date2 = None
         for _,row in filled.iterrows():
             ns = str(row['NEW_STATUS']).strip()
             cr = str(row.get('CANCEL_REASON','') or '').strip()
             if cr in ('nan','None'): cr = ''
-            if ns in STATUS_OPTS:
-                update_do_status(token, str(row['DO_NO']), ns, cr); count += 1
+            if ns not in STATUS_OPTS: continue
+            conn2.execute("""UPDATE plan_details SET status=?,cancel_reason=?,
+                cancelled_at=CASE WHEN ?='Cancelled' THEN ? ELSE cancelled_at END
+                WHERE token=? AND do_no=?""",
+                (ns, cr, ns, now2, token, str(row['DO_NO'])))
+            count += 1
+            if ns in ('Cancelled','Deleted','Not Picked'): needs_rebuild = True
+        if not plan_date2:
+            r2 = conn2.execute("SELECT plan_date FROM plans WHERE token=? LIMIT 1",(token,)).fetchone()
+            if r2: plan_date2 = r2['plan_date']
+        conn2.commit(); conn2.close()
+        if needs_rebuild and plan_date2:
+            rebuild_picker_state_for_date(plan_date2)
         return {'success': True, 'updated': count}
     except Exception as e:
         raise HTTPException(400, f"Upload error: {e}")

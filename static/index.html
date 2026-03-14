@@ -907,6 +907,10 @@ function HistoryPage({toast}){
             <div style={{display:'flex',flexDirection:'column',gap:6}}>
               <a href={`${API}/api/plans/${sel}/excel`} download><button className="btn btn-gr btn-sm" style={{whiteSpace:'nowrap'}}>⬇️ Download Excel</button></a>
               <button className="btn btn-d btn-sm" onClick={()=>setConfirm(sel)}>🗑️ Cancel Plan</button>
+              <button className="btn btn-g btn-sm" title="Recalculate machine available times from active DOs only"
+                onClick={async()=>{try{await apiFetch(`/api/plans/${sel}/rebuild-state`,{method:'POST'});toast('Machine state rebuilt — cancelled DOs freed','ok');}catch(e){toast(e.message,'err');}}}>
+                🔄 Rebuild State
+              </button>
             </div>
           </div>
           <div className="g5" style={{gap:8,marginBottom:11}}>
@@ -1161,12 +1165,13 @@ function ActualTimesPage({toast}){
 }
 
 // ── ANALYTICS PAGE ────────────────────────────────────────────────────────────
-function AnalyticsPage({toast}){
+function AnalyticsPage({toast,cfg:propCfg}){
   const[plans,setPlans]=useState([]);const[sel,setSel]=useState('');
   const[data,setData]=useState(null);const[loading,setLoading]=useState(false);
   useEffect(()=>{apiFetch('/api/plans').then(setPlans).catch(e=>toast(e.message,'err'));},[]);
   const load=async tok=>{setSel(tok);setData(null);if(!tok)return;
     setLoading(true);try{setData(await apiFetch(`/api/analytics/${tok}`));}catch(e){toast(e.message,'err');}finally{setLoading(false);}};
+  const cfg=propCfg||{start_min:480,wh_end:1020,fill_pct:70,bgt:3000};
   const bw=(v,mx)=>mx?`${Math.round(v/mx*100)}%`:'0%';
   const[atab,setAtab]=useState('overview');
   return<div>
@@ -1271,7 +1276,7 @@ function AnalyticsPage({toast}){
     {data&&atab==='details'&&<AnalyticsPlanDetails token={sel}/>}
 
     {/* ── MACHINE GANTT TAB ─────────────────────────────────────────── */}
-    {data&&atab==='gantt'&&<AnalyticsGantt token={sel} cfg={{start_min:480,wh_end:1020,fill_pct:70}}/>}
+    {data&&atab==='gantt'&&<AnalyticsGantt token={sel} cfg={cfg}/>}
   </div>;
 }
 
@@ -1353,17 +1358,40 @@ function AnalyticsPlanDetails({token}){
 
 function AnalyticsGantt({token,cfg}){
   const[detail,setDetail]=useState(null);const[loading,setLoading]=useState(false);
-  const[settings,setSettings]=useState(()=>{try{const s=localStorage.getItem('picker_cfg');return s?JSON.parse(s):cfg;}catch{return cfg;}});
-  useEffect(()=>{if(!token)return;setLoading(true);
-    apiFetch(`/api/plans/${token}`).then(d=>{setDetail(d);setLoading(false);}).catch(()=>setLoading(false));
+  // Read plan's own config from DB so Gantt is accurate even if Settings changed
+  const[planCfg,setPlanCfg]=useState(null);
+  useEffect(()=>{
+    if(!token)return;
+    setLoading(true);setDetail(null);
+    apiFetch(`/api/plans/${token}`).then(d=>{
+      setDetail(d);
+      // Use config stored in plan (from when it was generated), fallback to current cfg
+      try{
+        const pc=d.meta?.config_json?JSON.parse(d.meta.config_json):null;
+        setPlanCfg(pc||cfg);
+      }catch{setPlanCfg(cfg);}
+      setLoading(false);
+    }).catch(()=>setLoading(false));
   },[token]);
   if(loading)return<div className="ctr" style={{padding:40}}><Spin/></div>;
-  if(!detail)return<div className="al al-i">Loading plan for Gantt...</div>;
-  const s=settings||cfg;
+  if(!detail||!detail.details?.length)return<div className="al al-i">No plan details found for {token}.</div>;
+  const s=planCfg||cfg;
+  const machineCount=[...new Set(detail.details.map(d=>d.machine_no))].length;
+  const overWH=detail.details.filter(d=>d.over_wh).length;
   return<div>
-    <div className="al al-i" style={{marginBottom:10,fontSize:'.73rem'}}>
-      Showing machine-wise Gantt for <b>{token}</b> · {detail.details.length} DOs
-      · Sorted by utilisation (idle machines first — easy to spot underuse)
+    <div className="g4" style={{gap:8,marginBottom:10}}>
+      {[{l:'Total DOs',v:detail.details.length,c:'bl'},
+        {l:'Machines',v:machineCount,c:'pu'},
+        {l:'Over WH',v:overWH,c:overWH>0?'re':'gr'},
+        {l:'Plan Start',v:detail.details[0]?.plan_start||detail.details[0]?.start_time||'—',c:'cy'}]
+        .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'8px 11px'}}>
+          <div className="kl">{k.l}</div><div className="kv" style={{fontSize:'1rem'}}>{k.v}</div>
+        </div>)}
+    </div>
+    <div className="al al-i" style={{marginBottom:9,fontSize:'.72rem'}}>
+      Machine View: idle machines (lowest util%) at top — easy to spot underloaded machines.
+      WH close line at <b>{`${String((s.wh_end||1020)/60|0).padStart(2,'0')}:${String((s.wh_end||1020)%60).padStart(2,'0')}`}</b>
+      · Fill target <b>{s.fill_pct||70}%</b>
     </div>
     <GanttView details={detail.details} wsMin={s.start_min||480} weMin={s.wh_end||1020} fill={s.fill_pct||70}/>
   </div>;
@@ -1581,7 +1609,7 @@ function App(){
         {page==='plan'     &&<NewPlanPage cfg={cfg} toast={toast}/>}
         {page==='history'  &&<HistoryPage toast={toast}/>}
         {page==='actual'   &&<ActualTimesPage toast={toast}/>}
-        {page==='analytics'&&<AnalyticsPage toast={toast}/>}
+        {page==='analytics'&&<AnalyticsPage toast={toast} cfg={cfg}/>}
         {page==='cancel'   &&<CancelStatusPage toast={toast}/>}
         {page==='settings' &&<SettingsPage cfg={cfg} setCfg={setCfg} toast={toast}/>}
       </div>
