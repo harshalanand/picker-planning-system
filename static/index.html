@@ -618,8 +618,8 @@ function NewPlanPage({cfg,toast}){
 
         {result&&!result.error&&<div className="al al-i" style={{fontSize:'.72rem',marginBottom:10}}>
           🔁 <b>Run #{result.run_number}</b> for {result.plan_date}
-          {result.plan_start&&<> · ⏰ Schedule starts <b>{result.plan_start}</b> {result.plan_start==='08:00'?'(shift start — future/advance plan)':'(current time — mid-shift run)'}</>
-          {result.excluded_count>0&&<> · <b>{result.excluded_count} DOs excluded</b> (locked from prior runs)</>}
+          {result.plan_start&&<> · ⏰ Starts <b>{result.plan_start}</b> {result.plan_start==='08:00'?' (shift start)':' (mid-shift)'}</>}
+          {result.excluded_count>0&&<> · <b>{result.excluded_count} DOs excluded</b> (locked)</>}
         </div>}
 
         <button className="btn btn-p btn-fw btn-lg" disabled={!parsed||gen} onClick={generate}>
@@ -646,7 +646,8 @@ function NewPlanPage({cfg,toast}){
           <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:7,marginBottom:10}}>
             {[{l:'DOs Allocated',v:result.total_dos,c:'bl'},{l:'Total QTY',v:parseInt(result.total_qty).toLocaleString(),c:'gr'},
               {l:'Pickers Used',v:result.pickers_used,c:'pu'},{l:'Avg Util',v:`${result.avg_util}%`,c:result.avg_util>=cfg.fill_pct?'gr':'go'},
-              {l:'Skipped',v:result.skipped,c:result.skipped>0?'re':'gr'},{l:'Excluded',v:result.excluded_count||0,c:result.excluded_count>0?'go':'gr'}]
+              {l:'Skipped',v:result.skipped,c:result.skipped>0?'re':'gr'},{l:'Excluded',v:result.excluded_count||0,c:result.excluded_count>0?'go':'gr'},
+              {l:'Plan Start',v:result.plan_start||'08:00',c:'cy',s:result.plan_start&&result.plan_start!=='08:00'?'mid-shift':'shift start'}]
               .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}><div className="kl">{k.l}</div><div className="kv" style={{fontSize:'1.05rem'}}>{k.v}</div></div>)}
           </div>
           {result.grp_summary&&<MachineAvailability grp_summary={result.grp_summary} floor_avail={floorAvail} floor_required={floorReq} summary={parsed?.summary} cfg={cfg}/>}
