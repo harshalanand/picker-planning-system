@@ -113,6 +113,9 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         report_type TEXT NOT NULL,
         frequency TEXT NOT NULL,
+        send_time TEXT DEFAULT '08:00',
+        date_from TEXT DEFAULT '',
+        date_to TEXT DEFAULT '',
         recipients TEXT DEFAULT '',
         enabled INTEGER DEFAULT 1,
         last_sent TEXT DEFAULT ''
@@ -125,6 +128,12 @@ def init_db():
                       ('cancelled_at','TEXT DEFAULT ""')]:
         if col not in existing:
             conn.execute(f"ALTER TABLE plan_details ADD COLUMN {col} {defn}")
+    # Migrate email_schedule if needed
+    es_cols = {r[1] for r in conn.execute("PRAGMA table_info(email_schedule)").fetchall()}
+    for col, defn in [('send_time',"TEXT DEFAULT '08:00'"),('date_from',"TEXT DEFAULT ''"),('date_to',"TEXT DEFAULT ''")]:
+        if col not in es_cols:
+            try: conn.execute(f"ALTER TABLE email_schedule ADD COLUMN {col} {defn}")
+            except: pass
     conn.commit(); conn.close()
 
 init_db()
@@ -1255,13 +1264,16 @@ def api_analytics(token: str):
     picker_data = []
     for (floor,picker), pdf in df.groupby(['floor','picker_no']):
         sc = pdf['status'].value_counts().to_dict()
-        machine = pdf['machine_no'].iloc[0] if len(pdf) else ''
+        machine = str(pdf['machine_no'].iloc[0]) if len(pdf) else ''
+        scanner = str(pdf['scanner_name'].iloc[0]) if len(pdf) and 'scanner_name' in pdf.columns else ''
+        grp     = str(pdf['grp'].iloc[0]) if len(pdf) and 'grp' in pdf.columns else 'G1'
         picker_data.append({
-            'floor': int(floor), 'picker': int(picker), 'machine': str(machine),
+            'floor': int(floor), 'picker': int(picker), 'machine': machine,
+            'scanner': scanner, 'grp': grp,
             'dos': len(pdf), 'qty': int(pdf['do_qty'].sum()),
             'util': round(float(pdf['util_pct'].max()),1),
             'done': sc.get('Done',0), 'cancelled': sc.get('Cancelled',0),
-            'delayed': sc.get('Delayed',0)
+            'delayed': sc.get('Delayed',0), 'planned': sc.get('Planned',0)
         })
 
     return {
@@ -1387,11 +1399,17 @@ def api_get_schedules(user=Depends(require_admin)):
 def api_save_schedule(body: dict, user=Depends(require_admin)):
     conn = get_db()
     if body.get('id'):
-        conn.execute("UPDATE email_schedule SET report_type=?,frequency=?,recipients=?,enabled=? WHERE id=?",
-                     (body['report_type'],body['frequency'],body.get('recipients',''),int(body.get('enabled',1)),body['id']))
+        conn.execute("""UPDATE email_schedule SET report_type=?,frequency=?,send_time=?,
+            date_from=?,date_to=?,recipients=?,enabled=? WHERE id=?""",
+            (body['report_type'],body['frequency'],body.get('send_time','08:00'),
+             body.get('date_from',''),body.get('date_to',''),
+             body.get('recipients',''),int(body.get('enabled',1)),body['id']))
     else:
-        conn.execute("INSERT INTO email_schedule(report_type,frequency,recipients,enabled) VALUES(?,?,?,?)",
-                     (body['report_type'],body['frequency'],body.get('recipients',''),int(body.get('enabled',1))))
+        conn.execute("""INSERT INTO email_schedule(report_type,frequency,send_time,date_from,date_to,recipients,enabled)
+            VALUES(?,?,?,?,?,?,?)""",
+            (body['report_type'],body['frequency'],body.get('send_time','08:00'),
+             body.get('date_from',''),body.get('date_to',''),
+             body.get('recipients',''),int(body.get('enabled',1))))
     conn.commit(); conn.close()
     return {'success': True}
 
@@ -1413,6 +1431,7 @@ def api_dashboard():
         try: return conn.execute(q,a).fetchone()[0] or 0
         except: return 0
 
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
     result = {
         'today': {
             'plans':       safe("SELECT COUNT(*) FROM plans WHERE plan_date=?", today),
@@ -1426,8 +1445,15 @@ def api_dashboard():
         },
         'yesterday': {
             'done':        safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND status='Done'", yesterday),
+            'delayed':     safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND status='Delayed'", yesterday),
             'pending':     safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')='Planned'", yesterday),
             'total':       safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')!='Cancelled'", yesterday),
+            'qty_done':    safe("SELECT COALESCE(SUM(do_qty),0) FROM plan_details WHERE plan_date=? AND status IN ('Done','Delayed')", yesterday),
+        },
+        'tomorrow': {
+            'plans':       safe("SELECT COUNT(*) FROM plans WHERE plan_date=?", tomorrow),
+            'dos':         safe("SELECT COUNT(*) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')!='Cancelled'", tomorrow),
+            'qty':         safe("SELECT COALESCE(SUM(do_qty),0) FROM plan_details WHERE plan_date=? AND COALESCE(status,'Planned')!='Cancelled'", tomorrow),
         },
         'mtd': {
             'plans':       safe("SELECT COUNT(*) FROM plans WHERE plan_date>=?", month_start),
@@ -1506,7 +1532,13 @@ def api_export_dos(token: Optional[str]=None, date_from: Optional[str]=None,
     conn = get_db()
     q = "SELECT pd.*, at.actual_start, at.actual_end, at.actual_date FROM plan_details pd LEFT JOIN actual_times at ON pd.token=at.token AND pd.do_no=at.do_no WHERE 1=1"
     params = []
-    if token:     q += " AND pd.token=?";     params.append(token)
+    if token:
+        # Support comma-separated tokens
+        toks = [t.strip() for t in token.split(',') if t.strip()]
+        if len(toks) == 1:
+            q += " AND pd.token=?"; params.append(toks[0])
+        elif len(toks) > 1:
+            ph = ','.join('?'*len(toks)); q += f" AND pd.token IN ({ph})"; params.extend(toks)
     if date_from: q += " AND pd.plan_date>=?"; params.append(date_from)
     if date_to:   q += " AND pd.plan_date<=?"; params.append(date_to)
     if status:    q += " AND COALESCE(pd.status,'Planned')=?"; params.append(status)

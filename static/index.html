@@ -202,6 +202,26 @@ table.dt .n{text-align:right}
 const{useState,useEffect,useCallback,useRef,useMemo}=React;
 const API=window.location.origin;
 
+// ── CSV download helper ──────────────────────────────────────────────────────
+function dlTableCSV(rows, fname='export'){
+  if(!rows||!rows.length)return;
+  const keys=Object.keys(rows[0]);
+  const lines=[keys.join(','),...rows.map(r=>keys.map(k=>{const v=r[k];return typeof v==='string'&&v.includes(',')?`"${v}"`:v??'';}).join(','))];
+  const blob=new Blob([lines.join('\n')],{type:'text/csv'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=`${fname}_${new Date().toISOString().slice(0,10)}.csv`;a.click();
+}
+
+// ── Table-to-Excel helper (tab-separated, opens in Excel) ────────────────────
+function dlTableTSV(tableId, fname='export'){
+  const t=document.getElementById(tableId);
+  if(!t)return;
+  const rows=[...t.querySelectorAll('tr')].map(r=>[...r.querySelectorAll('th,td')].map(c=>c.innerText).join('\t'));
+  const blob=new Blob([rows.join('\n')],{type:'text/tab-separated-values'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=`${fname}_${new Date().toISOString().slice(0,10)}.tsv`;a.click();
+}
+
 async function apiFetch(path,opts={}){
   // Auto-inject auth token if present
   try{
@@ -265,7 +285,7 @@ function PBar({v,max=100,color,h=7,thr}){
 // ── GANTT ─────────────────────────────────────────────────────────────────
 function GanttView({details,wsMin,weMin,fill}){
   const[fl,setFl]=useState(null);
-  const[viewMode,setViewMode]=useState('machine'); // 'machine' or 'picker'
+  const viewMode='picker'; // Always picker view — machine+group shown in label
   const tm=s=>{try{const[h,m]=String(s).split(':');return+h*60+ +m}catch{return null}};
   const m2t=m=>`${String(m/60|0).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
   const floors=[...new Set(details.map(d=>d.floor))].sort();
@@ -275,8 +295,8 @@ function GanttView({details,wsMin,weMin,fill}){
     if(fl===null)return{};
     const fd={};
     details.filter(d=>d.floor===fl).forEach(d=>{
-      const key=viewMode==='machine'?String(d.machine_no||d.picker_no):String(d.picker_no||1);
-      if(!fd[key])fd[key]={dos:[],grp:d.grp||'G1',util:0,end:'',bgt:d.bgt_machine||3000,machine_no:d.machine_no,scanner:d.scanner_name};
+      const key=String(d.picker_no||1);
+      if(!fd[key])fd[key]={dos:[],grp:d.grp||'G1',util:0,end:'',bgt:d.bgt_machine||3000,machine_no:d.machine_no||'',scanner:d.scanner_name||''};
       fd[key].dos.push(d);
       if((d.util_pct||0)>fd[key].util)fd[key].util=d.util_pct||0;
       if(!fd[key].end||d.end_time>fd[key].end)fd[key].end=d.end_time;
@@ -304,10 +324,7 @@ function GanttView({details,wsMin,weMin,fill}){
       <div style={{display:'flex',gap:4}}>
         {floors.map(f=><button key={f} className={`btn btn-xs ${fl===f?'btn-p':'btn-g'}`} onClick={()=>setFl(f)}>Floor {f}</button>)}
       </div>
-      <div style={{marginLeft:'auto',display:'flex',gap:4}}>
-        <button className={`btn btn-xs ${viewMode==='machine'?'btn-p':'btn-g'}`} onClick={()=>setViewMode('machine')}>🔧 Machine View</button>
-        <button className={`btn btn-xs ${viewMode==='picker'?'btn-p':'btn-g'}`} onClick={()=>setViewMode('picker')}>👷 Picker View</button>
-      </div>
+      <span style={{fontSize:'.65rem',color:'var(--muted)',marginLeft:'auto'}}>👷 Picker View · Sorted by floor → picker number</span>
     </div>
 
     {/* Summary bar */}
@@ -322,42 +339,40 @@ function GanttView({details,wsMin,weMin,fill}){
 
     {fl!==null&&<div className="card" style={{padding:'12px 14px'}}>
       {/* Legend */}
-      <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8,paddingLeft:viewMode==='machine'?145:97}}>
+      <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8,paddingLeft:97}}>
         {[...new Set(Object.values(flDat).flatMap(p=>p.dos.map(d=>d.priority)))].sort((a,b)=>a-b).map(p=>
           <span key={p} style={{background:PCOL[(p-1)%PCOL.length],color:'#fff',fontSize:'.49rem',fontWeight:700,padding:'1px 5px',borderRadius:6}}>P{p}</span>)}
         <span style={{fontSize:'.49rem',color:'var(--muted)',marginLeft:6,alignSelf:'center'}}>Red line = {m2t(weMin)} · Dashed = Over WH</span>
       </div>
       {/* Time axis */}
-      <div style={{position:'relative',height:14,paddingLeft:viewMode==='machine'?145:97,marginBottom:4}}>
-        {ticks.map(t=><div key={t} style={{position:'absolute',left:`calc(${viewMode==='machine'?145:97}px + ${pct(t)})`,fontSize:'.47rem',color:'var(--muted)',fontFamily:'var(--mono)',transform:'translateX(-50%)'}}>{m2t(t)}</div>)}
+      <div style={{position:'relative',height:14,paddingLeft:97,marginBottom:4}}>
+        {ticks.map(t=><div key={t} style={{position:'absolute',left:`calc(${97}px + ${pct(t)})`,fontSize:'.47rem',color:'var(--muted)',fontFamily:'var(--mono)',transform:'translateX(-50%)'}}>{m2t(t)}</div>)}
       </div>
       <div style={{maxHeight:460,overflowY:'auto'}}>
         {Object.entries(flDat).sort((a,b)=>{
           // For machine view sort by util% ascending so idle machines show first (easy to spot)
-          if(viewMode==='machine')return a[1].util-b[1].util;
-          return +a[0]-+b[0];
+          return +a[0]-+b[0]; // sort by picker number
         }).map(([key,pkd])=>{
           const uc=pkd.util>=fill?'var(--green)':pkd.util>=50?'var(--gold)':'var(--red)';
           const gc={G1:'var(--green)',G2:'var(--accent)',G3:'var(--gold)'}[pkd.grp]||'var(--accent)';
-          const lblWidth=viewMode==='machine'?145:97;
+          const lblWidth=97;
           return<div key={key} className="gt-row">
             <div className="gt-lbl" style={{width:lblWidth}}>
-              {viewMode==='machine'?<>
+              <>
                 <div style={{display:'flex',alignItems:'center',gap:3,justifyContent:'flex-end'}}>
-                  <span style={{fontSize:'.55rem',fontFamily:'var(--mono)',color:'var(--t2)',fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:90}}>{key}</span>
-                  <GPill g={pkd.grp}/>
+                  <span style={{color:gc,fontFamily:'var(--mono)',fontSize:'.56rem',fontWeight:700}}>{pkd.grp}</span>
+                  <span style={{color:'var(--t2)',fontFamily:'var(--mono)',fontSize:'.6rem',fontWeight:700}}>·P{String(key).padStart(2,'0')}</span>
                 </div>
-                <div style={{display:'flex',alignItems:'center',gap:3,justifyContent:'flex-end',marginTop:1}}>
-                  <div style={{flex:1,maxWidth:70}}><div style={{height:3,background:'var(--border)',borderRadius:2,overflow:'hidden'}}>
+                <div style={{display:'flex',alignItems:'center',gap:2,justifyContent:'flex-end',marginTop:1}}>
+                  <span style={{fontSize:'.5rem',color:'var(--muted)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:85,textAlign:'right'}}>{pkd.machine_no||''}</span>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:2,justifyContent:'flex-end',marginTop:1}}>
+                  <div style={{height:3,background:'var(--border)',borderRadius:2,overflow:'hidden',width:60}}>
                     <div style={{height:'100%',width:`${pkd.util}%`,background:uc,borderRadius:2}}/>
-                  </div></div>
-                  <span style={{fontSize:'.52rem',color:uc,fontFamily:'var(--mono)',fontWeight:700,flexShrink:0}}>{Math.round(pkd.util)}%</span>
+                  </div>
+                  <span style={{fontSize:'.5rem',color:uc,fontFamily:'var(--mono)',fontWeight:700}}>{Math.round(pkd.util)}%</span>
                 </div>
-                {pkd.scanner&&<div style={{fontSize:'.47rem',color:'var(--muted)',textAlign:'right',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{pkd.scanner}</div>}
-              </>:<>
-                <span style={{color:gc,fontWeight:700}}>P{String(key).padStart(2,'0')}</span>
-                <span style={{color:uc,marginLeft:4,fontSize:'.57rem'}}>{Math.round(pkd.util)}%</span>
-              </>}
+              </>
             </div>
             <div className="gt-track">
               {/* Lunch shade */}
@@ -968,7 +983,7 @@ function ActualTimesPage({toast}){
   const[plans,setPlans]=useState([]);const[sel,setSel]=useState('');
   const[detail,setDetail]=useState(null);const[loading,setLoading]=useState(false);
   const[saving,setSaving]=useState(false);const[times,setTimes]=useState({});const todayStr=new Date().toISOString().slice(0,10);
-  const[flF,setFlF]=useState('all');const[pkF,setPkF]=useState('all');
+  const[flF,setFlF]=useState('all');const[pkF,setPkF]=useState('all');const[search,setSearch]=useState('');const[stF,setStF]=useState('all');const[dirty,setDirty]=useState(false);
   const[bulkO,setBulkO]=useState(false);const[bulkF,setBulkF]=useState(null);const[bulkS,setBulkS]=useState(false);
   const[bulkSH,setBulkSH]=useState('08');const[bulkEH,setBulkEH]=useState('17');
   const[bulkSM,setBulkSM]=useState('00');const[bulkEM,setBulkEM]=useState('00');
@@ -980,11 +995,11 @@ function ActualTimesPage({toast}){
       const t={};d.details.forEach(r=>{if(r.actual_start)t[r.do_no]={date:r.actual_date||d.meta.plan_date||new Date().toISOString().slice(0,10),start:r.actual_start,end:r.actual_end||'',notes:r.actual_notes||''};});
       setTimes(t);
     }catch(e){toast(e.message,'err');}finally{setLoading(false);}};
-  const setT=(dn,f,v)=>setTimes(t=>({...t,[dn]:{...(t[dn]||{}),[f]:v}}));
+  const setT=(dn,f,v)=>{setTimes(t=>({...t,[dn]:{...(t[dn]||{}),[f]:v}}));setDirty(true);};
   const applyBulk=()=>{
     const s=`${bulkSH}:${bulkSM}`,e=`${bulkEH}:${bulkEM}`;
     rows.forEach(d=>setTimes(t=>({...t,[d.do_no]:{...(t[d.do_no]||{}),start:s,end:e}})));
-    toast(`Bulk applied to ${rows.length} rows`,'info');
+    toast(`Bulk applied to ${rows.length} rows`,'info');setDirty(true);
   };
   const clearAll=()=>{setTimes({});toast('Cleared all times','info');};
   const save=async()=>{
@@ -993,7 +1008,7 @@ function ActualTimesPage({toast}){
       const recs=Object.entries(times).filter(([,v])=>v.start&&v.end).map(([dn,v])=>({do_no:dn,actual_start:v.start,actual_end:v.end,actual_date:v.date||detail.meta.plan_date,actual_qty:0,notes:v.notes||'',plan_date:detail.meta.plan_date}));
       if(!recs.length){toast('No times filled','warn');return;}
       const res=await apiFetch(`/api/actuals/${sel}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(recs)});
-      toast(`✓ Saved ${res.saved} records`,'ok');loadDet(sel);
+      toast(`✓ Saved ${res.saved} records`,'ok');setDirty(false);loadDet(sel);
     }catch(e){toast(e.message,'err');}finally{setSaving(false);}};
   const bulkUpload=async()=>{
     if(!bulkF||!sel)return;setBulkS(true);
@@ -1010,8 +1025,10 @@ function ActualTimesPage({toast}){
     if(!detail)return[];let r=detail.details;
     if(flF!=='all')r=r.filter(d=>String(d.floor)===flF);
     if(pkF!=='all')r=r.filter(d=>String(d.picker_no)===pkF);
+    if(stF!=='all')r=r.filter(d=>(d.status||'Planned')===stF||(stF==='pending'&&(d.status||'Planned')==='Planned'));
+    if(search.trim()){const q=search.toLowerCase();r=r.filter(d=>[d.do_no,d.machine_no,d.sec,d.scanner_name].some(v=>String(v||'').toLowerCase().includes(q)));}
     return r;
-  },[detail,flF,pkF]);
+  },[detail,flF,pkF,stF,search]);
   const filled=Object.values(times).filter(v=>v.start&&v.end).length;
   const varLabel=(ps,pe,as,ae)=>{
     const dm=(s,e)=>{try{const[h1,m1]=s.split(':').map(Number);const[h2,m2]=e.split(':').map(Number);return(h2*60+m2)-(h1*60+m1);}catch{return null;}};
@@ -1041,6 +1058,10 @@ function ActualTimesPage({toast}){
           {plans.map(p=><option key={p.token} value={p.token}>{p.token} · {p.plan_date} · {p.total_dos} DOs</option>)}
         </select>
         {sel&&<>
+          <div style={{marginBottom:8}}>
+            <input style={{fontSize:'.75rem',height:33}} placeholder="🔍 Search DO No / Machine / SEC / Scanner..."
+              value={search} onChange={e=>setSearch(e.target.value)}/>
+          </div>
           <div className="g2" style={{gap:9,marginBottom:9}}>
             <div className="fg"><label className="lbl">Floor</label>
               <select value={flF} onChange={e=>{setFlF(e.target.value);setPkF('all');}}>
@@ -1051,6 +1072,12 @@ function ActualTimesPage({toast}){
               <select value={pkF} onChange={e=>setPkF(e.target.value)}>
                 <option value="all">All Pickers</option>
                 {pickers.map(p=><option key={p} value={p}>Picker {p}</option>)}
+              </select></div>
+            <div className="fg"><label className="lbl">Status</label>
+              <select value={stF} onChange={e=>setStF(e.target.value)}>
+                <option value="all">All</option>
+                <option value="pending">Pending (Planned)</option>
+                {['Done','Delayed','Not Picked','Cancelled'].map(s=><option key={s} value={s}>{s}</option>)}
               </select></div>
           </div>
 
@@ -1134,8 +1161,9 @@ function ActualTimesPage({toast}){
         <div className="pb th" style={{marginBottom:10}}>
           <div className="pbf" style={{width:`${Math.round(filled/Math.max(1,rows.length)*100)}%`,background:'var(--green)'}}/>
         </div>
-        <button className="btn btn-p btn-fw" disabled={saving||filled===0} onClick={save}>
-          {saving?<><Spin sm/>&nbsp;Saving...</>:`💾 Save ${filled} Actual Time${filled!==1?'s':''}`}
+        <button className="btn btn-p btn-fw" disabled={saving||filled===0||!dirty} onClick={save}
+          style={{opacity:dirty?1:.5,transition:'opacity .2s'}}>
+          {saving?<><Spin sm/>&nbsp;Saving...</>:dirty?`💾 Save ${filled} Actual Time${filled!==1?'s':''}`:`✓ ${filled} Saved`}
         </button>
         <div className="hint" style={{marginTop:5,textAlign:'center'}}>Rows with both Start & End filled will be saved. Green = filled.</div>
       </div>}
@@ -1167,7 +1195,7 @@ function ActualTimesPage({toast}){
               <td>P{d.priority}</td><td className="n">{(d.do_qty||0).toLocaleString()}</td>
               <td style={{color:'var(--accent)',fontFamily:'var(--mono)',fontSize:'.67rem'}}>{d.start_time}</td>
               <td style={{color:'var(--muted)',fontFamily:'var(--mono)',fontSize:'.67rem'}}>{d.end_time}</td>
-              <td style={{background:'rgba(16,185,129,.03)'}}><input type="date" value={t.date||(d.status==='Planned'?todayStr:'')} onChange={e=>setT(d.do_no,'date',e.target.value)} style={{fontSize:'.67rem',padding:'3px 6px',width:108}}/></td>
+              <td style={{background:'rgba(16,185,129,.03)'}}><input type="date" value={t.date||(d.status==='Planned'||!d.status?todayStr:(d.actual_date||todayStr))} onChange={e=>setT(d.do_no,'date',e.target.value)} style={{fontSize:'.67rem',padding:'3px 6px',width:108}}/></td>
               <td style={{background:'rgba(16,185,129,.03)'}}><input type="time" value={t.start||''} onChange={e=>setT(d.do_no,'start',e.target.value)} style={{fontSize:'.67rem',padding:'3px 6px',width:83}}/></td>
               <td style={{background:'rgba(16,185,129,.03)'}}><input type="time" value={t.end||''} onChange={e=>setT(d.do_no,'end',e.target.value)} style={{fontSize:'.67rem',padding:'3px 6px',width:83}}/></td>
               <td style={{background:'rgba(16,185,129,.03)'}}><input type="text" value={t.notes||''} onChange={e=>setT(d.do_no,'notes',e.target.value)} placeholder="—" style={{fontSize:'.67rem',padding:'3px 6px',width:90}}/></td>
@@ -1201,7 +1229,7 @@ function AnalyticsPage({toast,cfg:propCfg}){
     {loading&&<div className="ctr" style={{padding:40}}><Spin/></div>}
     {data&&<>
       <div className="stabs" style={{marginBottom:13}}>
-        {[['overview','📊 Overview'],['floor','🏢 Floor Breakdown'],['picker','👷 Picker Performance'],['details','📋 Plan Details'],['gantt','📈 Machine Gantt']].map(([id,lbl])=>
+        {[['overview','📊 Overview'],['schedule','👷 Picker Schedule'],['floor','🏢 Floor Breakdown'],['picker','📊 Picker Perf'],['details','📋 Plan Details'],['gantt','📈 Gantt']].map(([id,lbl])=>
           <div key={id} className={`stab${atab===id?' on':''}`} onClick={()=>setAtab(id)}>{lbl}</div>)}
       </div>
     </>}
@@ -1262,36 +1290,83 @@ function AnalyticsPage({toast,cfg:propCfg}){
         </div>
       </div>
 
-      <div className="card">
-        <div className="sec" style={{marginTop:0}}>Picker Performance</div>
-        <div className="tw tl">
-          <table className="dt"><thead><tr>
-            <th>Floor</th><th>Picker</th><th>Machine</th><th>DOs</th><th>QTY</th><th>Utilisation</th><th>Done</th><th>Delayed</th><th>Cancelled</th>
-          </tr></thead><tbody>
-            {(data.picker_data||[]).map((p,i)=><tr key={i}>
-              <td><FL f={p.floor}/></td>
-              <td className="n" style={{fontFamily:'var(--mono)',fontWeight:700}}>P{p.picker}</td>
-              <td style={{fontSize:'.65rem'}}>{p.machine}</td>
-              <td className="n">{p.dos}</td><td className="n">{(p.qty||0).toLocaleString()}</td>
-              <td><div style={{display:'flex',alignItems:'center',gap:5}}>
-                <div className="pb sl" style={{width:55}}>
-                  <div className="pbf" style={{width:`${p.util}%`,background:p.util>=70?'var(--green)':'var(--gold)'}}/>
-                </div>
-                <span style={{fontSize:'.6rem',fontFamily:'var(--mono)',color:p.util>=70?'var(--green)':'var(--gold)'}}>{p.util}%</span>
-              </div></td>
-              <td className="n" style={{color:'var(--green)'}}>{p.done}</td>
-              <td className="n" style={{color:'var(--gold)'}}>{p.delayed}</td>
-              <td className="n" style={{color:'var(--red)'}}>{p.cancelled}</td>
-            </tr>)}
-          </tbody></table>
-        </div>
-      </div>
     </>}
+
+    {/* ── PICKER SCHEDULE TAB ──────────────────────────────── */}
+    {data&&atab==='schedule'&&<AnalyticsPickerSchedule token={sel} cfg={cfg}/>}
+
+    {/* ── FLOOR BREAKDOWN TAB ─────────────────────────────── */}
+    {data&&atab==='floor'&&<div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div style={{fontSize:'.7rem',fontWeight:600,color:'var(--t2)'}}>Floor Breakdown — {sel}</div>
+        <button className="btn btn-g btn-sm" onClick={()=>dlTableCSV(data.floor_data||[],'floor_breakdown')}>⬇️ Download CSV</button>
+      </div>
+      <div className="tw tl"><table className="dt"><thead><tr>
+        <th>Floor</th><th>Total DOs</th><th>QTY</th><th>Done</th><th>Delayed</th><th>Not Picked</th><th>Cancelled</th><th>Planned</th><th>% Done</th><th>Completion Bar</th>
+      </tr></thead><tbody>
+        {(data.floor_data||[]).map(f=>{
+          const active=f.total-f.cancelled;
+          const pct=Math.round((f.done+f.delayed)/Math.max(active,1)*100);
+          const col=pct>=80?'var(--green)':pct>=50?'var(--gold)':'var(--red)';
+          return<tr key={f.floor}>
+            <td><FL f={f.floor}/></td>
+            <td className="n" style={{fontWeight:700}}>{f.total}</td>
+            <td className="n">{(f.qty||0).toLocaleString()}</td>
+            <td className="n" style={{color:'var(--green)',fontWeight:700}}>{f.done}</td>
+            <td className="n" style={{color:'var(--gold)'}}>{f.delayed}</td>
+            <td className="n" style={{color:'var(--muted)'}}>{f.not_picked}</td>
+            <td className="n" style={{color:'var(--red)'}}>{f.cancelled}</td>
+            <td className="n" style={{color:'var(--accent)'}}>{f.planned}</td>
+            <td className="n" style={{color:col,fontFamily:'var(--mono)',fontWeight:700}}>{pct}%</td>
+            <td style={{minWidth:120}}>
+              <div className="pb" style={{height:12}}>
+                <div className="pbf" style={{width:`${pct}%`,background:col}}/>
+              </div>
+            </td>
+          </tr>;
+        })}
+      </tbody></table></div>
+    </div>}
+
+    {/* ── PICKER PERFORMANCE TAB ───────────────────────────── */}
+    {data&&atab==='picker'&&<div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div style={{fontSize:'.7rem',fontWeight:600,color:'var(--t2)'}}>Picker Performance — {sel}</div>
+        <button className="btn btn-g btn-sm" onClick={()=>dlTableCSV(data.picker_data||[],'picker_performance')}>⬇️ Download CSV</button>
+      </div>
+      <div className="tw xl"><table className="dt"><thead><tr>
+        <th>Floor</th><th>Picker</th><th>Machine</th><th>Scanner</th><th>Grp</th><th>DOs</th><th>QTY</th>
+        <th>Utilisation</th><th>Done</th><th>Delayed</th><th>Cancelled</th>
+      </tr></thead><tbody>
+        {(data.picker_data||[]).map((p,i)=>{
+          const col=p.util>=(data.meta?.fill_pct||cfg.fill_pct||70)?'var(--green)':'var(--gold)';
+          return<tr key={i}>
+            <td><FL f={p.floor}/></td>
+            <td className="n" style={{fontFamily:'var(--mono)',fontWeight:700,color:'var(--accent)'}}>
+              {p.grp||'G1'}·P{String(p.picker).padStart(2,'0')}
+            </td>
+            <td style={{fontFamily:'var(--mono)',fontSize:'.67rem',fontWeight:600}}>{p.machine}</td>
+            <td style={{fontSize:'.62rem',color:'var(--muted)'}}>{p.scanner||'—'}</td>
+            <td><GPill g={p.grp||'G1'}/></td>
+            <td className="n">{p.dos}</td>
+            <td className="n">{(p.qty||0).toLocaleString()}</td>
+            <td><div style={{display:'flex',alignItems:'center',gap:5}}>
+              <div className="pb sl" style={{width:55}}>
+                <div className="pbf" style={{width:`${p.util}%`,background:col}}/>
+              </div>
+              <span style={{fontSize:'.6rem',fontFamily:'var(--mono)',color:col,fontWeight:700}}>{p.util}%</span>
+            </div></td>
+            <td className="n" style={{color:'var(--green)',fontWeight:700}}>{p.done}</td>
+            <td className="n" style={{color:'var(--gold)'}}>{p.delayed}</td>
+            <td className="n" style={{color:'var(--red)'}}>{p.cancelled}</td>
+          </tr>;})}
+      </tbody></table></div>
+    </div>}
 
     {/* ── PLAN DETAILS TAB ──────────────────────────────────────────── */}
     {data&&atab==='details'&&<AnalyticsPlanDetails token={sel}/>}
 
-    {/* ── MACHINE GANTT TAB ─────────────────────────────────────────── */}
+    {/* ── GANTT TAB — Picker view with machine+group ───────────────── */}
     {data&&atab==='gantt'&&<AnalyticsGantt token={sel} cfg={cfg}/>}
   </div>;
 }
@@ -1422,6 +1497,10 @@ function CancelStatusPage({toast}){
   const[bulkO,setBulkO]=useState(false);const[bulkF,setBulkF]=useState(null);const[bulkS,setBulkS]=useState(false);
   const[bulkSt,setBulkSt]=useState('Cancelled');const[bulkR,setBulkR]=useState('');
   const SOPTS=['Planned','Done','Delayed','Not Picked','Cancelled'];
+  const getAllowedStatuses=(currentStatus)=>{
+    if(currentStatus==='Done')return[]; // Done is final — cannot be changed from frontend
+    return['Cancelled','Not Picked','Delayed','Planned']; // No Done option to prevent accidental
+  };
   const REASONS=['Picker absent','DO cancelled by WH','Merged with another DO','Stock unavailable','System error','End of shift','Other'];
   useEffect(()=>{apiFetch('/api/plans').then(setPlans).catch(e=>toast(e.message,'err'));},[]);
   const loadDet=async tok=>{setSel(tok);setDetail(null);setChanges({});if(!tok)return;
@@ -1536,9 +1615,11 @@ function CancelStatusPage({toast}){
             <td>P{d.priority}</td><td className="n">{(d.do_qty||0).toLocaleString()}</td>
             <td><SPill s={d.status||'Planned'}/></td>
             <td style={{background:'rgba(59,130,246,.025)'}}>
-              <select value={ch.status||''} onChange={e=>setChg(d.do_no,'status',e.target.value)} style={{width:130,fontSize:'.7rem',padding:'3px 6px',border:ch.status?'1px solid var(--accent)':'1px solid var(--b2)'}}>
-                <option value="">— no change —</option>{SOPTS.map(s=><option key={s}>{s}</option>)}
-              </select>
+{(d.status||'Planned')==='Done'?
+                <span style={{fontSize:'.65rem',color:'var(--green)',fontFamily:'var(--mono)',fontWeight:700,padding:'3px 8px',background:'rgba(16,185,129,.1)',borderRadius:4}}>✓ Done — locked</span>:
+                <select value={ch.status||''} onChange={e=>setChg(d.do_no,'status',e.target.value)} style={{width:130,fontSize:'.7rem',padding:'3px 6px',border:ch.status?'1px solid var(--accent)':'1px solid var(--b2)'}}>
+                  <option value="">— no change —</option>{getAllowedStatuses(d.status||'Planned').map(s=><option key={s}>{s}</option>)}
+                </select>}
             </td>
             <td style={{background:'rgba(59,130,246,.025)'}}>
               {(ch.status==='Cancelled'||ch.status==='Not Picked')&&
@@ -1567,6 +1648,7 @@ const NAV=[
   {id:'users',    ico:'👥',lbl:'Users',          grp:'System'},
   {id:'email',    ico:'✉️',lbl:'Email Reports',  grp:'System'},
   {id:'help',     ico:'❓',lbl:'Help & SOP',     grp:'System'},
+  {id:'reports',  ico:'📑',lbl:'Reports',         grp:'System'},
 ];
 const PSUB={dashboard:'Live KPIs, trends, scanner performance, completion stats',
   plan:'Upload DO+Machine Excel → run allocation',history:'Saved plans, download Excel, cancel plan',
@@ -1574,7 +1656,7 @@ const PSUB={dashboard:'Live KPIs, trends, scanner performance, completion stats'
   cancel:'Update DO status · unlock cancelled DOs',settings:'Shift timing, capacity rules, algorithm reference',
   users:'User management — roles: admin, operator, viewer',
   email:'Email report configuration and schedules',
-  help:'System logic, SOP, and user guide'};
+  help:'System logic, SOP, and user guide',reports:'Generate & download reports by token or date range'};
 
 function App(){
   const[page,setPage]=useState('plan');
@@ -1652,7 +1734,7 @@ function App(){
         </div>
       </div>
       <div className="content">
-        {page==='dashboard' &&<DashboardPage toast={toast} cfg={cfg}/>}
+        {page==='dashboard' &&<DashboardPage toast={toast} cfg={cfg} setPage={setPage}/>}
         {page==='plan'      &&(isOp?<NewPlanPage cfg={cfg} toast={toast}/>:<AuthGate role="operator" onLogin={()=>setShowLogin(true)}/>)}
         {page==='history'   &&<HistoryPage toast={toast}/>}
         {page==='actual'    &&<ActualTimesPage toast={toast}/>}
@@ -1662,6 +1744,7 @@ function App(){
         {page==='users'     &&(isAdmin?<UsersPage toast={toast}/>:<AuthGate role="admin" onLogin={()=>setShowLogin(true)}/>)}
         {page==='email'     &&(isAdmin?<EmailPage toast={toast}/>:<AuthGate role="admin" onLogin={()=>setShowLogin(true)}/>)}
         {page==='help'      &&<HelpPage/>}
+        {page==='reports'   &&<ReportsPage toast={toast}/>}
         {showLogin&&<LoginModal onSuccess={a=>{saveAuth(a);setShowLogin(false);toast(`Welcome ${a.username}!`,'ok');}} onClose={()=>setShowLogin(false)} toast={toast}/>}
       </div>
     </div>
@@ -1705,144 +1788,211 @@ function LoginModal({onSuccess,onClose,toast}){
 }
 
 // ── DASHBOARD PAGE ────────────────────────────────────────────────────────────
-function DashboardPage({toast,cfg}){
+function DashboardPage({toast,cfg,setPage}){
   const[data,setData]=useState(null);const[loading,setLoading]=useState(true);
   const load=()=>{setLoading(true);apiFetch('/api/dashboard').then(d=>{setData(d);setLoading(false);}).catch(e=>{toast(e.message,'err');setLoading(false);});};
   useEffect(()=>{load();const t=setInterval(load,60000);return()=>clearInterval(t);},[]);
   if(loading&&!data)return<div className="ctr" style={{padding:60}}><Spin/></div>;
   if(!data)return<div className="al al-e">Failed to load dashboard</div>;
-  const {today,yesterday,mtd,wtd,total,last_7_days,scanner_perf,floor_summary,recent_plans}=data;
+  const{today,yesterday,tomorrow,mtd,wtd,total,last_7_days,scanner_perf,floor_summary,recent_plans}=data;
   const todayPct=Math.round((today.done+today.delayed)/Math.max(today.dos_total,1)*100);
+  const ytdPct=Math.round((yesterday.done+yesterday.delayed)/Math.max(yesterday.total,1)*100);
   const mtdPct=Math.round(mtd.dos_done/Math.max(mtd.dos_total,1)*100);
+  const col_pct=p=>p>=80?'var(--green)':p>=50?'var(--gold)':'var(--red)';
+
+  // Clickable card wrapper
+  const KCard=({l,v,c,s,onClick,badge})=><div className={`kpi ${c}`} onClick={onClick}
+    style={{cursor:onClick?'pointer':'default',transition:'transform .15s,box-shadow .15s',
+      ...(onClick?{':hover':{transform:'translateY(-2px)'}}:{})}}
+    onMouseEnter={e=>{if(onClick)e.currentTarget.style.transform='translateY(-2px)';}}
+    onMouseLeave={e=>{if(onClick)e.currentTarget.style.transform='none';}}>
+    <div className="kl">{l}</div>
+    <div className="kv">{v}</div>
+    {s&&<div className="ks">{s}</div>}
+    {badge&&<div style={{position:'absolute',top:6,right:8,fontSize:'.55rem',background:'var(--accent)',color:'#fff',padding:'1px 5px',borderRadius:8,fontFamily:'var(--mono)'}}>{badge}</div>}
+  </div>;
+
   return<div>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-      <div><div style={{fontSize:'.6rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.1em'}}>Live Dashboard · Auto-refreshes every 60s</div></div>
-      <button className="btn btn-g btn-sm" onClick={load}>↻ Refresh</button>
-    </div>
-
-    {/* Today KPIs */}
-    <div className="sec">Today — {new Date().toISOString().slice(0,10)}</div>
-    <div className="g6" style={{gap:8,marginBottom:13}}>
-      {[{l:'Plans Run',v:today.plans,c:'bl'},{l:'Total DOs',v:today.dos_total,c:'pu'},
-        {l:'Done',v:today.done,c:'gr',s:`${todayPct}% complete`},
-        {l:'Pending',v:today.pending,c:'go',s:'Planned, not executed'},
-        {l:'Delayed',v:today.delayed,c:'cy'},{l:'Cancelled',v:today.cancelled,c:'re'}]
-        .map(k=><div key={k.l} className={`kpi ${k.c}`}>
-          <div className="kl">{k.l}</div><div className="kv">{k.v}</div>
-          {k.s&&<div className="ks">{k.s}</div>}
-        </div>)}
-    </div>
-
-    {/* Today completion bar */}
-    <div className="card" style={{marginBottom:13,padding:'12px 16px'}}>
-      <div style={{display:'flex',justifyContent:'space-between',marginBottom:7}}>
-        <span style={{fontSize:'.7rem',fontWeight:600}}>Today's Completion</span>
-        <span style={{fontFamily:'var(--mono)',fontWeight:700,color:todayPct>=80?'var(--green)':todayPct>=50?'var(--gold)':'var(--red)',fontSize:'.95rem'}}>{todayPct}%</span>
-      </div>
-      <div className="pb th" style={{marginBottom:6}}>
-        <div className="pbf" style={{width:`${todayPct}%`,background:todayPct>=80?'var(--green)':todayPct>=50?'var(--gold)':'var(--red)'}}/>
-      </div>
-      <div style={{display:'flex',gap:12,fontSize:'.62rem',color:'var(--muted)'}}>
-        <span>QTY Done: <b style={{color:'var(--green)',fontFamily:'var(--mono)'}}>{(today.qty_done||0).toLocaleString()}</b></span>
-        <span>QTY Total: <b style={{fontFamily:'var(--mono)'}}>{(today.qty_total||0).toLocaleString()}</b></span>
-        <span>Yesterday Done: <b style={{fontFamily:'var(--mono)'}}>{yesterday.done}</b> / {yesterday.total}</span>
-        {yesterday.pending>0&&<span style={{color:'var(--gold)'}}>Yesterday Pending: <b>{yesterday.pending}</b></span>}
-      </div>
-    </div>
-
-    <div className="g2" style={{gap:13,marginBottom:13}}>
-      {/* MTD + WTD */}
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
       <div>
-        <div className="sec">Month-to-Date</div>
-        <div className="g2" style={{gap:8,marginBottom:8}}>
-          {[{l:'Plans',v:mtd.plans,c:'bl'},{l:'DOs Done',v:mtd.dos_done,c:'gr'},
-            {l:'Completion',v:`${mtdPct}%`,c:mtdPct>=80?'gr':'go'},{l:'QTY Done',v:(mtd.qty_done||0).toLocaleString(),c:'cy'}]
-            .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}>
-              <div className="kl">{k.l}</div><div className="kv" style={{fontSize:'.95rem'}}>{k.v}</div>
-            </div>)}
+        <div style={{fontFamily:'var(--mono)',fontSize:'.85rem',fontWeight:700}}>Live Dashboard</div>
+        <div style={{fontSize:'.62rem',color:'var(--muted)'}}>Auto-refreshes every 60s · {new Date().toLocaleTimeString()}</div>
+      </div>
+      <button className="btn btn-g btn-sm" onClick={load}>↻ Refresh Now</button>
+    </div>
+
+    {/* ── TODAY ─────────────────────────────────────────────────────── */}
+    <div className="sec">🏭 Today — {new Date().toISOString().slice(0,10)}</div>
+
+    {/* Completion hero bar */}
+    <div className="card" style={{marginBottom:10,padding:'14px 18px',background:'linear-gradient(135deg,var(--card),var(--card2))'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+        <div>
+          <div style={{fontSize:'.65rem',color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.1em'}}>Today's Progress</div>
+          <div style={{fontFamily:'var(--mono)',fontSize:'1.8rem',fontWeight:700,color:col_pct(todayPct)}}>{todayPct}%</div>
         </div>
-        <div className="sec">Week-to-Date</div>
-        <div className="g2" style={{gap:8,marginBottom:8}}>
-          {[{l:'DOs Done',v:wtd.dos_done,c:'gr'},{l:'Completion',v:`${Math.round(wtd.dos_done/Math.max(wtd.dos_total,1)*100)}%`,c:'bl'}]
-            .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}>
-              <div className="kl">{k.l}</div><div className="kv" style={{fontSize:'.95rem'}}>{k.v}</div>
-            </div>)}
-        </div>
-        <div className="sec">All-Time</div>
-        <div className="g4" style={{gap:8}}>
-          {[{l:'Total Plans',v:total.plans,c:'bl'},{l:'Total DOs',v:total.dos,c:'pu'},
-            {l:'Done',v:total.done,c:'gr'},{l:'Machines',v:total.machines,c:'cy'}]
-            .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}>
-              <div className="kl">{k.l}</div><div className="kv" style={{fontSize:'.9rem'}}>{k.v}</div>
-            </div>)}
+        <div style={{textAlign:'right'}}>
+          <div style={{fontFamily:'var(--mono)',fontSize:'.9rem',fontWeight:700,color:'var(--green)'}}>{today.done} <span style={{fontSize:'.65rem',color:'var(--muted)'}}>Done</span></div>
+          <div style={{fontFamily:'var(--mono)',fontSize:'.9rem',color:'var(--gold)'}}>{today.pending} <span style={{fontSize:'.65rem',color:'var(--muted)'}}>Pending</span></div>
+          {today.delayed>0&&<div style={{fontFamily:'var(--mono)',fontSize:'.8rem',color:'var(--cyan)'}}>{today.delayed} <span style={{fontSize:'.6rem',color:'var(--muted)'}}>Delayed</span></div>}
         </div>
       </div>
-
-      {/* 7-day trend */}
-      <div>
-        <div className="sec">7-Day Trend</div>
-        <div className="card" style={{padding:'12px 14px'}}>
-          {last_7_days.map((d,i)=>{
-            const mx=Math.max(...last_7_days.map(x=>x.total),1);
-            const barW=Math.round(d.total/mx*100);
-            const doneW=Math.round(d.done/mx*100);
-            const dt=new Date(d.date+'T00:00:00');
-            const lbl=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()]+' '+d.date.slice(5);
-            return<div key={d.date} className="bc-row">
-              <div className="bc-lbl" style={{width:80,fontSize:'.6rem'}}>{lbl}</div>
-              <div className="bc-bar" style={{position:'relative'}}>
-                <div style={{position:'absolute',left:0,top:0,height:'100%',width:`${barW}%`,background:'rgba(59,130,246,.2)',borderRadius:3}}/>
-                <div style={{position:'absolute',left:0,top:0,height:'100%',width:`${doneW}%`,background:'var(--green)',borderRadius:3,opacity:.8}}/>
-                <span className="bc-val">{d.done}/{d.total} ({d.pct}%)</span>
-              </div>
-            </div>;
-          })}
-        </div>
+      <div style={{height:12,background:'var(--border)',borderRadius:6,overflow:'hidden',position:'relative'}}>
+        <div style={{position:'absolute',left:0,top:0,height:'100%',width:`${todayPct}%`,background:col_pct(todayPct),borderRadius:6,transition:'width .5s'}}/>
+        {today.delayed>0&&<div style={{position:'absolute',left:`${Math.round(today.done/Math.max(today.dos_total,1)*100)}%`,top:0,height:'100%',
+          width:`${Math.round(today.delayed/Math.max(today.dos_total,1)*100)}%`,background:'var(--cyan)',opacity:.7}}/>}
+      </div>
+      <div style={{display:'flex',gap:14,marginTop:6,fontSize:'.62rem',color:'var(--muted)'}}>
+        <span>QTY done: <b style={{color:'var(--green)',fontFamily:'var(--mono)'}}>{(today.qty_done||0).toLocaleString()}</b></span>
+        <span>Total QTY: <b style={{fontFamily:'var(--mono)'}}>{(today.qty_total||0).toLocaleString()}</b></span>
+        <span>Plans run: <b style={{fontFamily:'var(--mono)'}}>{today.plans}</b></span>
+        <span style={{marginLeft:'auto',cursor:'pointer',color:'var(--accent)'}} onClick={()=>setPage&&setPage('analytics')}>→ Analytics</span>
       </div>
     </div>
 
-    {/* Floor summary today */}
+    <div className="g6" style={{gap:8,marginBottom:12}}>
+      <KCard l="Done" v={today.done} c="gr" s={`of ${today.dos_total} DOs`} onClick={()=>setPage&&setPage('analytics')}/>
+      <KCard l="Pending" v={today.pending} c="go" s="Not yet executed" onClick={()=>setPage&&setPage('cancel')}/>
+      <KCard l="Delayed" v={today.delayed} c="cy" onClick={()=>setPage&&setPage('analytics')}/>
+      <KCard l="Cancelled" v={today.cancelled} c="re" onClick={()=>setPage&&setPage('cancel')}/>
+      <KCard l="Plans Run" v={today.plans} c="bl" onClick={()=>setPage&&setPage('history')}/>
+      <KCard l="Machines" v={total.machines} c="pu" onClick={()=>setPage&&setPage('analytics')}/>
+    </div>
+
+    <div className="g3" style={{gap:12,marginBottom:12}}>
+      {/* Yesterday */}
+      <div className="card2" style={{borderLeft:'3px solid var(--muted)',padding:'12px 14px'}}>
+        <div style={{fontSize:'.6rem',color:'var(--muted)',textTransform:'uppercase',fontWeight:700,marginBottom:8}}>📅 Yesterday</div>
+        <div style={{fontFamily:'var(--mono)',fontSize:'1.4rem',fontWeight:700,color:col_pct(ytdPct)}}>{ytdPct}%</div>
+        <div className="pb sl" style={{marginBottom:6}}>
+          <div className="pbf" style={{width:`${ytdPct}%`,background:col_pct(ytdPct)}}/>
+        </div>
+        <div style={{display:'flex',gap:10,fontSize:'.65rem'}}>
+          <span style={{color:'var(--green)'}}>{yesterday.done} Done</span>
+          <span style={{color:'var(--gold)'}}>{yesterday.pending||0} Pending</span>
+          {(yesterday.delayed||0)>0&&<span style={{color:'var(--cyan)'}}>{yesterday.delayed} Delayed</span>}
+        </div>
+        <div style={{fontSize:'.62rem',color:'var(--muted)',marginTop:3}}>
+          QTY: <b style={{fontFamily:'var(--mono)',color:'var(--t2)'}}>{(yesterday.qty_done||0).toLocaleString()}</b>
+        </div>
+      </div>
+      {/* Tomorrow planned */}
+      <div className="card2" style={{borderLeft:`3px solid ${(tomorrow?.dos||0)>0?'var(--accent)':'var(--border)'}`,padding:'12px 14px',cursor:(tomorrow?.dos||0)>0?'pointer':'default'}}
+        onClick={()=>(tomorrow?.dos||0)>0&&setPage&&setPage('history')}>
+        <div style={{fontSize:'.6rem',color:'var(--muted)',textTransform:'uppercase',fontWeight:700,marginBottom:8}}>📅 Tomorrow Planned</div>
+        {(tomorrow?.plans||0)>0?<>
+          <div style={{fontFamily:'var(--mono)',fontSize:'1.4rem',fontWeight:700,color:'var(--accent)'}}>{tomorrow.dos}</div>
+          <div style={{fontSize:'.68rem',color:'var(--t2)',marginTop:2}}>{tomorrow.plans} plan(s) · {(tomorrow.qty||0).toLocaleString()} pcs</div>
+          <div style={{fontSize:'.62rem',color:'var(--muted)',marginTop:4}}>Click to view → History</div>
+        </>:<div style={{fontSize:'.75rem',color:'var(--muted)',marginTop:8}}>
+          No plans yet
+          <div style={{marginTop:8}}><button className="btn btn-p btn-xs" onClick={e=>{e.stopPropagation();setPage&&setPage('plan');}}>+ Create Plan</button></div>
+        </div>}
+      </div>
+      {/* WTD */}
+      <div className="card2" style={{borderLeft:'3px solid var(--a3)',padding:'12px 14px'}}>
+        <div style={{fontSize:'.6rem',color:'var(--muted)',textTransform:'uppercase',fontWeight:700,marginBottom:8}}>📆 Week-to-Date</div>
+        <div style={{fontFamily:'var(--mono)',fontSize:'1.4rem',fontWeight:700,color:'var(--a3)'}}>{Math.round(wtd.dos_done/Math.max(wtd.dos_total,1)*100)}%</div>
+        <div className="pb sl" style={{marginBottom:6}}>
+          <div className="pbf" style={{width:`${Math.round(wtd.dos_done/Math.max(wtd.dos_total,1)*100)}%`,background:'var(--a3)'}}/>
+        </div>
+        <div style={{fontSize:'.65rem',color:'var(--t2)'}}>{wtd.dos_done} / {wtd.dos_total} DOs</div>
+      </div>
+    </div>
+
+    {/* Floor today */}
     {floor_summary.length>0&&<>
-      <div className="sec">Today — Floor Breakdown</div>
-      <div className="card" style={{padding:'12px 14px',marginBottom:13}}>
-        <div style={{display:'grid',gridTemplateColumns:'50px 1fr 70px 70px 70px 70px 80px',gap:6,marginBottom:6,
-          fontSize:'.53rem',color:'var(--muted)',textTransform:'uppercase',fontWeight:700}}>
-          <span>Floor</span><span>Completion</span><span className="n" style={{textAlign:'right'}}>Total</span>
-          <span className="n" style={{textAlign:'right'}}>Done</span><span className="n" style={{textAlign:'right'}}>Pending</span>
-          <span className="n" style={{textAlign:'right'}}>Cancel</span><span className="n" style={{textAlign:'right'}}>QTY</span>
+      <div className="sec">🏢 Today — Floor Breakdown</div>
+      <div className="card" style={{marginBottom:12,padding:'11px 14px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'50px 1fr 65px 65px 65px 65px 75px',gap:5,marginBottom:5,
+          fontSize:'.52rem',color:'var(--muted)',textTransform:'uppercase',fontWeight:700,letterSpacing:'.07em'}}>
+          <span>Floor</span><span>Progress</span><span style={{textAlign:'right'}}>Total</span>
+          <span style={{textAlign:'right',color:'var(--green)'}}>Done</span>
+          <span style={{textAlign:'right',color:'var(--gold)'}}>Pending</span>
+          <span style={{textAlign:'right',color:'var(--red)'}}>Cancel</span>
+          <span style={{textAlign:'right'}}>QTY</span>
         </div>
         {floor_summary.map(f=>{
-          const pct=Math.round(f.done/Math.max(f.total-f.cancelled,1)*100);
-          const col=pct>=80?'var(--green)':pct>=50?'var(--gold)':'var(--red)';
-          return<div key={f.floor} style={{display:'grid',gridTemplateColumns:'50px 1fr 70px 70px 70px 70px 80px',gap:6,alignItems:'center',padding:'4px 0',borderBottom:'1px solid rgba(26,37,53,.6)'}}>
+          const active=f.total-(f.cancelled||0);
+          const pct=Math.round((f.done||0)/Math.max(active,1)*100);
+          const col=col_pct(pct);
+          return<div key={f.floor} style={{display:'grid',gridTemplateColumns:'50px 1fr 65px 65px 65px 65px 75px',gap:5,
+            alignItems:'center',padding:'5px 0',borderBottom:'1px solid rgba(26,37,53,.5)',cursor:'pointer'}}
+            onClick={()=>setPage&&setPage('analytics')}>
             <FL f={f.floor}/>
-            <div><div className="pb sl" style={{marginBottom:1}}>
-              <div className="pbf" style={{width:`${pct}%`,background:col}}/>
-            </div><span style={{fontSize:'.55rem',color:col,fontFamily:'var(--mono)'}}>{pct}%</span></div>
+            <div>
+              <div style={{height:8,background:'var(--border)',borderRadius:4,overflow:'hidden',marginBottom:2}}>
+                <div style={{height:'100%',width:`${pct}%`,background:col,borderRadius:4}}/>
+              </div>
+              <span style={{fontSize:'.54rem',color:col,fontFamily:'var(--mono)',fontWeight:700}}>{pct}%</span>
+            </div>
             <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem'}}>{f.total}</span>
-            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--green)'}}>{f.done}</span>
-            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--gold)'}}>{f.pending}</span>
-            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--red)'}}>{f.cancelled}</span>
+            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--green)',fontWeight:700}}>{f.done||0}</span>
+            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--gold)'}}>{f.pending||0}</span>
+            <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--red)'}}>{f.cancelled||0}</span>
             <span style={{textAlign:'right',fontFamily:'var(--mono)',fontSize:'.68rem',color:'var(--muted)'}}>{(f.qty||0).toLocaleString()}</span>
           </div>;
         })}
       </div>
     </>}
 
+    <div className="g2" style={{gap:13,marginBottom:12}}>
+      {/* 7-day trend */}
+      <div>
+        <div className="sec">📈 7-Day Trend</div>
+        <div className="card" style={{padding:'12px 14px'}}>
+          {last_7_days.map((d,i)=>{
+            const mx=Math.max(...last_7_days.map(x=>x.total),1);
+            const bW=Math.round(d.total/mx*100),dW=Math.round(d.done/mx*100);
+            const dt=new Date(d.date+'T00:00:00');
+            const isToday=d.date===new Date().toISOString().slice(0,10);
+            const lbl=['Su','Mo','Tu','We','Th','Fr','Sa'][dt.getDay()]+' '+d.date.slice(5);
+            return<div key={d.date} className="bc-row" style={{opacity:d.total===0?.4:1}}>
+              <div style={{width:50,fontSize:'.6rem',color:isToday?'var(--accent)':'var(--muted)',fontWeight:isToday?700:400,fontFamily:'var(--mono)',flexShrink:0}}>{lbl}</div>
+              <div className="bc-bar" style={{position:'relative'}}>
+                <div style={{position:'absolute',left:0,top:0,height:'100%',width:`${bW}%`,background:'rgba(59,130,246,.15)',borderRadius:3}}/>
+                <div style={{position:'absolute',left:0,top:0,height:'100%',width:`${dW}%`,background:col_pct(d.pct),borderRadius:3,opacity:.85}}/>
+                <span className="bc-val">{d.total>0?`${d.done}/${d.total} (${d.pct}%)`:'—'}</span>
+              </div>
+            </div>;
+          })}
+        </div>
+      </div>
+
+      {/* MTD summary */}
+      <div>
+        <div className="sec">📊 Month-to-Date</div>
+        <div className="g2" style={{gap:8,marginBottom:8}}>
+          {[{l:'Plans',v:mtd.plans,c:'bl',p:'history'},{l:'DOs Done',v:mtd.dos_done,c:'gr',p:'analytics'},
+            {l:'Completion',v:`${mtdPct}%`,c:mtdPct>=80?'gr':'go',p:'analytics'},{l:'QTY Done',v:(mtd.qty_done||0).toLocaleString(),c:'cy',p:'analytics'}]
+            .map(k=><KCard key={k.l} l={k.l} v={k.v} c={k.c} onClick={()=>setPage&&setPage(k.p)}/>)}
+        </div>
+        <div className="sec" style={{marginTop:10}}>🔢 All-Time</div>
+        <div className="g2" style={{gap:8}}>
+          {[{l:'Total Plans',v:total.plans,c:'bl',p:'history'},{l:'Total DOs Done',v:total.done,c:'gr',p:'analytics'},
+            {l:'Total Machines',v:total.machines,c:'pu',p:'analytics'},{l:'All DOs',v:total.dos,c:'cy',p:'history'}]
+            .map(k=><KCard key={k.l} l={k.l} v={k.v} c={k.c} s="" onClick={()=>setPage&&setPage(k.p)}/>)}
+        </div>
+      </div>
+    </div>
+
+    {/* Scanner MTD + Recent */}
     <div className="g2" style={{gap:13}}>
-      {/* Scanner MTD performance */}
       {scanner_perf.length>0&&<div>
-        <div className="sec">Scanner / Machine Performance — MTD</div>
+        <div className="sec" style={{display:'flex',justifyContent:'space-between'}}>
+          <span>🔧 Scanner / Machine — MTD</span>
+          <button className="btn btn-g btn-xs" onClick={()=>dlTableCSV(scanner_perf,'scanner_perf_mtd')}>⬇️ CSV</button>
+        </div>
         <div className="tw tl">
           <table className="dt"><thead><tr>
             <th>Machine</th><th>Scanner</th><th>DOs</th><th>QTY</th><th>Done</th><th>Avg Util%</th>
           </tr></thead><tbody>
-            {scanner_perf.map((s,i)=><tr key={i}>
+            {scanner_perf.map((s,i)=><tr key={i} style={{cursor:'pointer'}} onClick={()=>setPage&&setPage('analytics')}>
               <td style={{fontFamily:'var(--mono)',fontWeight:600,fontSize:'.67rem'}}>{s.machine_no}</td>
               <td style={{fontSize:'.63rem',color:'var(--muted)'}}>{s.scanner_name||'—'}</td>
               <td className="n">{s.dos}</td>
               <td className="n">{(s.qty||0).toLocaleString()}</td>
-              <td className="n" style={{color:'var(--green)'}}>{s.done}</td>
+              <td className="n" style={{color:'var(--green)',fontWeight:700}}>{s.done}</td>
               <td>
                 <div style={{display:'flex',alignItems:'center',gap:4}}>
                   <div className="pb sl" style={{width:45}}>
@@ -1856,21 +2006,23 @@ function DashboardPage({toast,cfg}){
         </div>
       </div>}
 
-      {/* Recent plans */}
       <div>
-        <div className="sec">Recent Plans</div>
+        <div className="sec" style={{display:'flex',justifyContent:'space-between'}}>
+          <span>🕐 Recent Plans</span>
+          <button className="btn btn-g btn-xs" onClick={()=>setPage&&setPage('history')}>View All →</button>
+        </div>
         <div className="tw tl">
           <table className="dt"><thead><tr>
-            <th>Token</th><th>Date</th><th>Run</th><th>DOs</th><th>Done</th><th>Util%</th>
+            <th>Token</th><th>Date</th><th>DOs</th><th>Done</th><th>Util%</th>
           </tr></thead><tbody>
             {recent_plans.map((p,i)=>{
               const pct=Math.round((p.done_count||0)/Math.max(p.total_dos,1)*100);
-              return<tr key={i}>
+              return<tr key={i} style={{cursor:'pointer'}} onClick={()=>setPage&&setPage('analytics')}>
                 <td style={{fontFamily:'var(--mono)',fontSize:'.65rem',color:'var(--accent)',fontWeight:700}}>{p.token}</td>
                 <td style={{fontSize:'.65rem'}}>{p.plan_date}</td>
-                <td className="n">R{p.run_number}</td>
                 <td className="n">{p.total_dos}</td>
-                <td className="n" style={{color:'var(--green)'}}>{p.done_count||0}
+                <td className="n">
+                  <span style={{color:col_pct(pct),fontFamily:'var(--mono)',fontWeight:700}}>{p.done_count||0}</span>
                   <span style={{fontSize:'.55rem',color:'var(--muted)',marginLeft:3}}>{pct}%</span>
                 </td>
                 <td><div className="pb sl" style={{width:50}}>
@@ -1954,7 +2106,7 @@ function UsersPage({toast}){
 // ── EMAIL PAGE ────────────────────────────────────────────────────────────────
 function EmailPage({toast}){
   const[cfg,setCfgE]=useState({smtp_host:'',smtp_port:587,smtp_user:'',smtp_pass:'',from_addr:'',enabled:0});
-  const[scheds,setScheds]=useState([]);const[newSch,setNewSch]=useState({report_type:'daily_summary',frequency:'daily',recipients:'',enabled:1});
+  const[scheds,setScheds]=useState([]);const[newSch,setNewSch]=useState({report_type:'daily_summary',frequency:'daily',send_time:'08:00',date_from:'',date_to:'',recipients:'',enabled:1});
   const[testing,setTesting]=useState(false);const[testTo,setTestTo]=useState('');
   const token=()=>JSON.parse(localStorage.getItem('picker_auth')||'{}').token||'';
   const authHdr=()=>({'Content-Type':'application/json','Authorization':`Bearer ${token()}`});
@@ -2013,26 +2165,37 @@ function EmailPage({toast}){
       <div>
         <div className="sec">Report Schedules</div>
         <div className="sbox">
-          <div className="fg" style={{marginBottom:8}}><label className="lbl">Report Type</label>
-            <select value={newSch.report_type} onChange={e=>setNewSch(s=>({...s,report_type:e.target.value}))}>
-              {REPORT_TYPES.map(t=><option key={t}>{t}</option>)}
-            </select></div>
           <div className="g2" style={{gap:8,marginBottom:8}}>
+            <div className="fg"><label className="lbl">Report Type</label>
+              <select value={newSch.report_type} onChange={e=>setNewSch(s=>({...s,report_type:e.target.value}))}>
+                {REPORT_TYPES.map(t=><option key={t}>{t}</option>)}
+              </select></div>
             <div className="fg"><label className="lbl">Frequency</label>
               <select value={newSch.frequency} onChange={e=>setNewSch(s=>({...s,frequency:e.target.value}))}>
                 {FREQS.map(f=><option key={f}>{f}</option>)}
               </select></div>
-            <div className="fg"><label className="lbl">Recipients (comma-separated)</label>
+          </div>
+          <div className="g2" style={{gap:8,marginBottom:8}}>
+            <div className="fg"><label className="lbl">Send Time (HH:MM)</label>
+              <input type="time" value={newSch.send_time||'08:00'} onChange={e=>setNewSch(s=>({...s,send_time:e.target.value}))}/></div>
+            <div className="fg"><label className="lbl">Recipients</label>
               <input value={newSch.recipients} onChange={e=>setNewSch(s=>({...s,recipients:e.target.value}))} placeholder="a@b.com,c@d.com"/></div>
           </div>
+          {['daily','weekly'].includes(newSch.frequency)&&<div className="g2" style={{gap:8,marginBottom:8}}>
+            <div className="fg"><label className="lbl">Date From (optional)</label>
+              <input type="date" value={newSch.date_from||''} onChange={e=>setNewSch(s=>({...s,date_from:e.target.value}))}/></div>
+            <div className="fg"><label className="lbl">Date To (optional)</label>
+              <input type="date" value={newSch.date_to||''} onChange={e=>setNewSch(s=>({...s,date_to:e.target.value}))}/></div>
+          </div>}
           <button className="btn btn-p btn-sm" onClick={saveSch}>➕ Add Schedule</button>
         </div>
         <div className="tw md" style={{marginTop:8}}>
-          <table className="dt"><thead><tr><th>Type</th><th>Frequency</th><th>Recipients</th><th>Status</th><th></th></tr></thead>
+          <table className="dt"><thead><tr><th>Type</th><th>Freq</th><th>Send At</th><th>Recipients</th><th>Status</th><th></th></tr></thead>
           <tbody>{scheds.map(s=><tr key={s.id}>
             <td style={{fontSize:'.65rem',color:'var(--accent)'}}>{s.report_type}</td>
             <td style={{fontSize:'.65rem'}}>{s.frequency}</td>
-            <td style={{fontSize:'.62rem',color:'var(--muted)',maxWidth:150,overflow:'hidden',textOverflow:'ellipsis'}}>{s.recipients}</td>
+            <td style={{fontFamily:'var(--mono)',fontSize:'.65rem',color:'var(--cyan)'}}>{s.send_time||'08:00'}</td>
+            <td style={{fontSize:'.62rem',color:'var(--muted)',maxWidth:130,overflow:'hidden',textOverflow:'ellipsis'}}>{s.recipients}</td>
             <td><span className={`pill ${s.enabled?'pD':'pC'}`}>{s.enabled?'Active':'Off'}</span></td>
             <td><button className="btn btn-d btn-xs" onClick={()=>delSch(s.id)}>✕</button></td>
           </tr>)}</tbody></table>
@@ -2130,6 +2293,222 @@ function HelpPage(){
         </table>
       </div>}
     </div>)}
+  </div>;
+}
+
+
+// ── AnalyticsPickerSchedule ───────────────────────────────────────────────────
+function AnalyticsPickerSchedule({token,cfg}){
+  const[detail,setDetail]=useState(null);const[loading,setLoading]=useState(false);
+  useEffect(()=>{if(!token)return;setLoading(true);
+    apiFetch(`/api/plans/${token}`).then(d=>{setDetail(d);setLoading(false);}).catch(()=>setLoading(false));
+  },[token]);
+  const sched=useMemo(()=>{
+    if(!detail?.details)return[];
+    const m={};
+    detail.details.forEach(d=>{
+      const k=`${d.floor}-${d.picker_no}`;
+      if(!m[k])m[k]={floor:d.floor,picker_no:d.picker_no,machine_no:d.machine_no,
+        scanner:d.scanner_name,grp:d.grp,bgt:d.bgt_machine,dos:0,qty:0,
+        start:d.start_time,end:d.end_time,util:0,prios:[],
+        done:0,delayed:0,cancelled:0,planned:0};
+      m[k].dos++;m[k].qty+=d.do_qty;
+      if(d.start_time<m[k].start)m[k].start=d.start_time;
+      if(d.end_time>m[k].end)m[k].end=d.end_time;
+      if((d.util_pct||0)>m[k].util)m[k].util=d.util_pct||0;
+      if(!m[k].prios.includes(d.priority))m[k].prios.push(d.priority);
+      const st=d.status||'Planned';
+      if(st==='Done')m[k].done++;else if(st==='Delayed')m[k].delayed++;
+      else if(st==='Cancelled')m[k].cancelled++;else m[k].planned++;
+    });
+    return Object.values(m).sort((a,b)=>a.floor-b.floor||a.picker_no-b.picker_no);
+  },[detail]);
+  if(loading)return<div className="ctr" style={{padding:40}}><Spin/></div>;
+  if(!detail)return<div className="al al-i">Loading picker schedule...</div>;
+  const fp=cfg?.fill_pct||70;
+  return<div>
+    <div style={{display:'flex',justifyContent:'space-between',marginBottom:10,alignItems:'center'}}>
+      <div style={{fontSize:'.7rem',fontWeight:600}}>Picker Schedule — {token} · {sched.length} pickers</div>
+      <button className="btn btn-g btn-sm" onClick={()=>dlTableCSV(sched,'picker_schedule')}>⬇️ Download CSV</button>
+    </div>
+    <div className="tw xl"><table className="dt"><thead><tr>
+      <th>Floor</th><th>Picker</th><th>Machine</th><th>Scanner</th><th>Grp</th><th>BGT</th>
+      <th>DOs</th><th>QTY</th><th>Priorities</th><th>Start</th><th>End</th><th>Util%</th>
+      <th>Done</th><th>Delayed</th><th>Cancelled</th><th>Pending</th>
+    </tr></thead><tbody>
+      {sched.map((r,i)=>{
+        const col=r.util>=fp?'var(--green)':'var(--gold)';
+        const gc={G1:'var(--green)',G2:'var(--accent)',G3:'var(--gold)'}[r.grp]||'var(--accent)';
+        return<tr key={i}>
+          <td><FL f={r.floor}/></td>
+          <td className="n" style={{fontFamily:'var(--mono)',fontWeight:700,color:'var(--accent)'}}>
+            <span style={{color:gc,fontWeight:700,fontSize:'.6rem'}}>{r.grp}·</span>P{String(r.picker_no).padStart(2,'0')}
+          </td>
+          <td style={{fontFamily:'var(--mono)',fontWeight:600,fontSize:'.67rem'}}>{r.machine_no}</td>
+          <td style={{fontSize:'.63rem',color:'var(--muted)'}}>{r.scanner||'—'}</td>
+          <td><GPill g={r.grp}/></td>
+          <td className="n" style={{fontSize:'.63rem'}}>{(r.bgt||0).toLocaleString()}</td>
+          <td className="n">{r.dos}</td>
+          <td className="n">{r.qty.toLocaleString()}</td>
+          <td style={{fontSize:'.6rem',color:'var(--muted)',maxWidth:120,overflow:'hidden'}}>
+            {r.prios.sort((a,b)=>a-b).map(p=>`P${p}`).join('→')}
+          </td>
+          <td style={{color:'var(--accent)',fontFamily:'var(--mono)',fontSize:'.67rem'}}>{r.start}</td>
+          <td style={{fontFamily:'var(--mono)',fontSize:'.67rem'}}>{r.end}</td>
+          <td>
+            <div style={{display:'flex',alignItems:'center',gap:5}}>
+              <div className="pb sl" style={{width:50}}>
+                <div className="pbf" style={{width:`${r.util}%`,background:col}}/>
+              </div>
+              <span style={{fontSize:'.62rem',color:col,fontFamily:'var(--mono)',fontWeight:700}}>{r.util}%</span>
+            </div>
+          </td>
+          <td className="n" style={{color:'var(--green)',fontWeight:700}}>{r.done}</td>
+          <td className="n" style={{color:'var(--gold)'}}>{r.delayed}</td>
+          <td className="n" style={{color:'var(--red)'}}>{r.cancelled}</td>
+          <td className="n" style={{color:'var(--accent)'}}>{r.planned}</td>
+        </tr>;})}
+    </tbody></table></div>
+  </div>;
+}
+
+// ── REPORTS PAGE ─────────────────────────────────────────────────────────────
+function ReportsPage({toast}){
+  const[plans,setPlans]=useState([]);const[selTokens,setSelTokens]=useState([]);
+  const[dateFrom,setDateFrom]=useState('');const[dateTo,setDateTo]=useState('');
+  const[mode,setMode]=useState('token'); // 'token' or 'date'
+  const[statusF,setStatusF]=useState('All');const[floorF,setFloorF]=useState('');
+  const[loading,setLoading]=useState(false);const[preview,setPreview]=useState(null);
+  useEffect(()=>{apiFetch('/api/plans').then(setPlans).catch(()=>{});},[]);
+  const toggleToken=(tok)=>setSelTokens(t=>t.includes(tok)?t.filter(x=>x!==tok):[...t,tok]);
+  const selectAll=()=>setSelTokens(plans.map(p=>p.token));
+  const clearAll=()=>setSelTokens([]);
+  const buildUrl=(fmt='excel')=>{
+    let url=`${API}/api/export/dos?`;
+    const params=[];
+    if(mode==='token')selTokens.forEach(t=>params.push(`token=${encodeURIComponent(t)}`));
+    if(mode==='date'){if(dateFrom)params.push(`date_from=${dateFrom}`);if(dateTo)params.push(`date_to=${dateTo}`);}
+    if(statusF!=='All')params.push(`status=${encodeURIComponent(statusF)}`);
+    if(floorF)params.push(`floor=${floorF}`);
+    return url+params.join('&');
+  };
+  const loadPreview=async()=>{
+    setLoading(true);setPreview(null);
+    try{
+      let url='/api/analytics/summary?';
+      if(mode==='date'){if(dateFrom)url+=`date_from=${dateFrom}&`;if(dateTo)url+=`date_to=${dateTo}&`;}
+      const d=await apiFetch(url);setPreview(d);
+    }catch(e){toast(e.message,'err');}finally{setLoading(false);}
+  };
+  const dateGroups=useMemo(()=>{
+    const g={};plans.forEach(p=>{if(!g[p.plan_date])g[p.plan_date]=[];g[p.plan_date].push(p);});
+    return Object.entries(g).sort(([a],[b])=>b.localeCompare(a));
+  },[plans]);
+  return<div>
+    <div className="g2" style={{gap:16,marginBottom:16}}>
+      <div>
+        <div className="sec">Report Configuration</div>
+        <div className="stabs" style={{marginBottom:12}}>
+          <div className={`stab${mode==='token'?' on':''}`} onClick={()=>setMode('token')}>🏷️ By Token</div>
+          <div className={`stab${mode==='date'?' on':''}`} onClick={()=>setMode('date')}>📅 By Date Range</div>
+        </div>
+        {mode==='token'&&<>
+          <div style={{display:'flex',gap:6,marginBottom:8}}>
+            <button className="btn btn-g btn-sm" onClick={selectAll}>Select All</button>
+            <button className="btn btn-g btn-sm" onClick={clearAll}>Clear</button>
+            <span style={{fontSize:'.65rem',color:'var(--muted)',alignSelf:'center'}}>{selTokens.length} selected</span>
+          </div>
+          <div style={{maxHeight:340,overflowY:'auto',border:'1px solid var(--border)',borderRadius:8}}>
+            {dateGroups.map(([dt,dps])=><div key={dt}>
+              <div style={{background:'var(--s1)',padding:'4px 10px',fontSize:'.58rem',color:'var(--muted)',fontFamily:'var(--mono)',fontWeight:700,sticky:'top'}}>{dt}</div>
+              {dps.map(p=><div key={p.token} onClick={()=>toggleToken(p.token)}
+                style={{display:'flex',alignItems:'center',gap:8,padding:'7px 10px',cursor:'pointer',
+                  background:selTokens.includes(p.token)?'rgba(59,130,246,.1)':'transparent',
+                  borderBottom:'1px solid rgba(26,37,53,.5)'}}>
+                <input type="checkbox" checked={selTokens.includes(p.token)} onChange={()=>{}} style={{width:'auto',pointerEvents:'none'}}/>
+                <div>
+                  <div style={{fontFamily:'var(--mono)',fontSize:'.72rem',fontWeight:700,color:selTokens.includes(p.token)?'var(--accent)':'var(--t2)'}}>{p.token}</div>
+                  <div style={{fontSize:'.6rem',color:'var(--muted)'}}>{p.total_dos} DOs · R{p.run_number} · Util {p.avg_util}%</div>
+                </div>
+              </div>)}
+            </div>)}
+          </div>
+        </>}
+        {mode==='date'&&<div className="g2" style={{gap:9}}>
+          <div className="fg"><label className="lbl">Date From</label>
+            <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)}/></div>
+          <div className="fg"><label className="lbl">Date To</label>
+            <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)}/></div>
+        </div>}
+        <div className="g2" style={{gap:9,marginTop:10}}>
+          <div className="fg"><label className="lbl">Status Filter</label>
+            <select value={statusF} onChange={e=>setStatusF(e.target.value)}>
+              <option>All</option>{['Planned','Done','Delayed','Not Picked','Cancelled'].map(s=><option key={s}>{s}</option>)}
+            </select></div>
+          <div className="fg"><label className="lbl">Floor Filter (blank = all)</label>
+            <input type="number" placeholder="e.g. 1" value={floorF} onChange={e=>setFloorF(e.target.value)}/></div>
+        </div>
+      </div>
+
+      <div>
+        <div className="sec">Download</div>
+        <div className="card" style={{padding:'16px'}}>
+          <div style={{fontSize:'.72rem',color:'var(--muted)',marginBottom:14,lineHeight:1.6}}>
+            Download all DO data across selected {mode==='token'?`${selTokens.length} plan(s)`:'date range'} in one Excel file.
+            Includes all columns: Token, Plan Date, Floor, Priority, DO No, SEC, QTY, Picker, Machine, Scanner, Group,
+            BGT, Start Time, End Time, Status, Cancel Reason, Actual Date, Actual Start, Actual End.
+          </div>
+          <a href={buildUrl('excel')} download style={{display:'block',marginBottom:8}}>
+            <button className="btn btn-gr btn-fw btn-lg" disabled={mode==='token'&&!selTokens.length}>
+              📥 Download DO Export Excel
+            </button>
+          </a>
+          <button className="btn btn-g btn-fw" onClick={loadPreview} disabled={loading}>
+            {loading?<><Spin sm/>&nbsp;Loading...</>:'👁️ Preview Summary'}
+          </button>
+        </div>
+
+        {preview&&<>
+          <div className="sec" style={{marginTop:13}}>Report Summary Preview</div>
+          <div className="g3" style={{gap:8,marginBottom:10}}>
+            {[{l:'Plans',v:preview.summary?.total_dos?preview.plans?.length:0,c:'bl'},
+              {l:'Total DOs',v:preview.summary?.total_dos||0,c:'pu'},
+              {l:'Completion',v:`${preview.summary?.completion_pct||0}%`,c:'gr'},
+              {l:'QTY',v:(preview.summary?.total_qty||0).toLocaleString(),c:'cy'},
+              {l:'Pickers',v:preview.summary?.pickers_used||0,c:'go'},
+              {l:'Date Range',v:preview.summary?.dates?.length?`${preview.summary.dates[0]} → ${preview.summary.dates[preview.summary.dates.length-1]}`:'—',c:'pu'}]
+              .map(k=><div key={k.l} className={`kpi ${k.c}`} style={{padding:'9px 11px'}}>
+                <div className="kl">{k.l}</div><div className="kv" style={{fontSize:'.9rem'}}>{k.v}</div>
+              </div>)}
+          </div>
+          {preview.summary?.status_counts&&<div className="card" style={{padding:'12px 14px',marginBottom:10}}>
+            <div style={{fontSize:'.6rem',color:'var(--muted)',marginBottom:7,textTransform:'uppercase',letterSpacing:'.1em'}}>Status Distribution</div>
+            <div className="sbar" style={{marginBottom:7}}>
+              {Object.entries(preview.summary.status_counts).map(([s,c])=>{
+                const pct=(c/Math.max(preview.summary.total_dos,1)*100).toFixed(1);
+                return<div key={s} className="sbs" style={{width:`${pct}%`,background:STCL[s]||'#666'}} title={`${s}: ${c}`}/>;
+              })}
+            </div>
+            <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
+              {Object.entries(preview.summary.status_counts).map(([s,c])=><span key={s} style={{fontSize:'.63rem',display:'flex',alignItems:'center',gap:3}}>
+                <span style={{width:8,height:8,borderRadius:2,background:STCL[s]||'#666',display:'inline-block'}}/>{s}: <b>{c}</b>
+              </span>)}
+            </div>
+          </div>}
+          {preview.plans?.length>0&&<div className="tw md">
+            <table className="dt"><thead><tr><th>Token</th><th>Date</th><th>Run</th><th>DOs</th><th>Util%</th></tr></thead>
+            <tbody>{preview.plans.map((p,i)=><tr key={i}>
+              <td style={{fontFamily:'var(--mono)',fontSize:'.67rem',color:'var(--accent)',fontWeight:700}}>{p.token}</td>
+              <td>{p.plan_date}</td><td className="n">R{p.run_number}</td>
+              <td className="n">{p.total_dos}</td>
+              <td><div className="pb sl" style={{width:50}}>
+                <div className="pbf" style={{width:`${p.avg_util||0}%`,background:'var(--green)'}}/>
+              </div></td>
+            </tr>)}</tbody></table>
+          </div>}
+        </>}
+      </div>
+    </div>
   </div>;
 }
 
