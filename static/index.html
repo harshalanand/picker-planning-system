@@ -1779,7 +1779,7 @@ function LoginModal({onSuccess,onClose,toast}){
     <div style={{marginBottom:16}} className="fg"><label className="lbl">Password</label>
       <input type="password" value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}/>
     </div>
-    <div style={{fontSize:'.65rem',color:'var(--muted)',marginBottom:14}}>Default: admin / admin123</div>
+    <div style={{fontSize:'.65rem',color:'var(--muted)',marginBottom:14,display:'none'}}>Default: admin / admin123</div>
     <div className="mo-f">
       <button className="btn btn-g btn-sm" onClick={onClose}>Cancel</button>
       <button className="btn btn-p btn-sm" disabled={loading} onClick={submit}>{loading?<><Spin sm/>&nbsp;Logging in...</>:'Login'}</button>
